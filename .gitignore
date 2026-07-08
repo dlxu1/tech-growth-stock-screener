@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime caches and local databases
+.cache/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Local runtime output
+.tech_growth_runtime/
+.tech_growth_arch_test_cache/
+reports/
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+

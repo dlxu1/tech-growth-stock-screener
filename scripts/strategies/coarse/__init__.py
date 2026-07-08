@@ -1,0 +1,2 @@
+"""Coarse stock-screening strategies."""
+

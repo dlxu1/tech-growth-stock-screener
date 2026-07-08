@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tech Growth Stock Screener"
+  short_description: "Screens tech leaders with real growth"
+  default_prompt: "Use $tech-growth-stock-screener to screen A-share technology stocks with top industry market cap and real one-year earnings growth."
