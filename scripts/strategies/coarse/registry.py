@@ -15,6 +15,7 @@ import pandas as pd
 
 from common import db_path, find_col, to_number
 from data.sources import load_financial_report, load_spot, normalize_financials
+from infra.persistence import persist_layer_result
 from strategies.coarse import repository as coarse_repository
 from strategies.tech_growth import build_tech_universe
 
@@ -155,6 +156,45 @@ STRATEGIES: dict[str, CoarseStrategy] = {
     "low_drawdown_positive_growth": CoarseStrategy("low_drawdown_positive_growth", "回撤较小 + 正增长", "最大回撤越小越好，同时增长为正。", _score_low_drawdown_positive_growth, ("max_drawdown_252d", "revenue_yoy", "profit_yoy")),
     "industry_breadth_leaders": CoarseStrategy("industry_breadth_leaders", "行业景气扩散粗筛", "行业内增长为正的公司越多越好，再选市值龙头。", _score_industry_breadth_leaders, ("industry_growth_breadth", "market_cap")),
 }
+
+
+POTENTIAL_COMBO_STRATEGY_WEIGHTS = {
+    "market_cap_revenue_profit_growth": 1.25,
+    "high_roe_reasonable_pe": 1.15,
+    "high_gross_margin_revenue_growth": 1.00,
+    "low_drawdown_positive_growth": 1.15,
+    "active_amount_solid_fundamentals": 1.00,
+    "price_strength_market_cap": 0.75,
+}
+
+
+COMBO_OUTPUT_COLUMNS = [
+    "code",
+    "name",
+    "board_name",
+    "combo_score",
+    "overlap_score",
+    "quality_score",
+    "growth_score",
+    "risk_control_score",
+    "liquidity_score",
+    "momentum_score",
+    "strategy_hits",
+    "matched_strategies",
+    "market_cap",
+    "pe",
+    "pb",
+    "revenue_yoy",
+    "profit_yoy",
+    "roe",
+    "gross_margin",
+    "amount_20d",
+    "return_60d",
+    "max_drawdown_252d",
+    "combo_reason",
+    "risk_flags",
+    "data_note",
+]
 
 
 OPTIONAL_COLUMN_ALIASES = {
@@ -300,23 +340,78 @@ def _apply_positive_filters(df: pd.DataFrame, strategy: CoarseStrategy) -> pd.Da
     return out
 
 
+def _missing_required_metrics(df: pd.DataFrame, strategy: CoarseStrategy) -> list[str]:
+    return [
+        metric
+        for metric in strategy.required_metrics
+        if metric not in df.columns or pd.to_numeric(df[metric], errors="coerce").notna().sum() == 0
+    ]
+
+
+def _select_strategy_from_base(base: pd.DataFrame, args, strategy_name: str, top: int) -> tuple[pd.DataFrame, list[str]]:
+    strategy = STRATEGIES[strategy_name]
+    filtered = _apply_positive_filters(base, strategy)
+    if filtered.empty:
+        filtered = base.copy()
+    selected = filtered.copy()
+    selected["coarse_score"] = strategy.ranker(selected)
+    selected["coarse_strategy"] = strategy.name
+    selected["coarse_strategy_title"] = strategy.title
+    selected["coarse_reason"] = strategy.description
+    missing = _missing_required_metrics(selected, strategy)
+    selected["data_note"] = "完整字段" if not missing else "缺少字段，已降级: " + ",".join(missing)
+    return selected.sort_values(["coarse_score", "market_cap"], ascending=[False, False]).head(top).copy(), missing
+
+
+def _fmt_flag(condition: bool, text: str) -> str | None:
+    return text if condition else None
+
+
+def _row_risk_flags(row) -> str:
+    revenue_yoy = row.get("revenue_yoy", pd.NA)
+    profit_yoy = row.get("profit_yoy", pd.NA)
+    max_drawdown_252d = row.get("max_drawdown_252d", pd.NA)
+    return_60d = row.get("return_60d", pd.NA)
+    pe = row.get("pe", pd.NA)
+    amount_20d = row.get("amount_20d", pd.NA)
+    flags = [
+        _fmt_flag(pd.notna(revenue_yoy) and revenue_yoy <= 0, "营收未正增长"),
+        _fmt_flag(pd.notna(profit_yoy) and profit_yoy <= 0, "净利未正增长"),
+        _fmt_flag(pd.notna(max_drawdown_252d) and max_drawdown_252d < -0.35, "年内回撤偏大"),
+        _fmt_flag(pd.notna(return_60d) and return_60d < -0.15, "60日走势偏弱"),
+        _fmt_flag(pd.notna(pe) and (pe <= 0 or pe > 100), "PE异常或偏高"),
+        _fmt_flag(pd.notna(amount_20d) and amount_20d < 20000000, "成交额偏低"),
+    ]
+    clean = [flag for flag in flags if flag]
+    return "、".join(clean) if clean else "暂无明显粗筛风险"
+
+
+def _combo_reason(row) -> str:
+    revenue_yoy = row.get("revenue_yoy", pd.NA)
+    profit_yoy = row.get("profit_yoy", pd.NA)
+    roe = row.get("roe", pd.NA)
+    max_drawdown_252d = row.get("max_drawdown_252d", pd.NA)
+    amount_20d = row.get("amount_20d", pd.NA)
+    reasons = []
+    if row.get("strategy_hits", 0) >= 3:
+        reasons.append("多策略共振")
+    if pd.notna(revenue_yoy) and pd.notna(profit_yoy) and revenue_yoy > 0 and profit_yoy > 0:
+        reasons.append("营收净利双增长")
+    if pd.notna(roe) and roe > 10:
+        reasons.append("ROE较好")
+    if pd.notna(max_drawdown_252d) and max_drawdown_252d >= -0.25:
+        reasons.append("回撤相对可控")
+    if pd.notna(amount_20d) and amount_20d >= 20000000:
+        reasons.append("流动性达标")
+    return "、".join(reasons) if reasons else "组合分靠前，需人工复核基本面与风险"
+
+
 def run_one(args, strategy_name: str) -> tuple[pd.DataFrame, dict]:
     if strategy_name not in STRATEGIES:
         raise RuntimeError(f"Unknown coarse strategy: {strategy_name}")
     strategy = STRATEGIES[strategy_name]
     base, meta = coarse_repository.build_base_universe(args)
-    filtered = _apply_positive_filters(base, strategy)
-    if filtered.empty:
-        filtered = base.copy()
-    score = strategy.ranker(filtered)
-    filtered = filtered.copy()
-    filtered["coarse_score"] = score
-    filtered["coarse_strategy"] = strategy.name
-    filtered["coarse_strategy_title"] = strategy.title
-    missing = [metric for metric in strategy.required_metrics if metric not in filtered.columns or pd.to_numeric(filtered[metric], errors="coerce").notna().sum() == 0]
-    filtered["data_note"] = "完整字段" if not missing else "缺少字段，已降级: " + ",".join(missing)
-    filtered["coarse_reason"] = strategy.description
-    selected = filtered.sort_values(["coarse_score", "market_cap"], ascending=[False, False]).head(args.top).copy()
+    selected, missing = _select_strategy_from_base(base, args, strategy_name, args.top)
     cols = [
         "coarse_strategy",
         "coarse_strategy_title",
@@ -342,6 +437,94 @@ def run_one(args, strategy_name: str) -> tuple[pd.DataFrame, dict]:
     return selected[cols], meta
 
 
+def run_combo(args) -> tuple[pd.DataFrame, dict]:
+    base, meta = coarse_repository.build_base_universe(args)
+    if base.empty:
+        meta.update({"strategy": "potential_combo", "top": args.top, "selected": 0})
+        result = pd.DataFrame(columns=COMBO_OUTPUT_COLUMNS)
+        persist_layer_result("combo", args, result, meta)
+        return result, meta
+
+    strategy_top = max(args.top, getattr(args, "combo_strategy_top", 20))
+    strategy_frames = []
+    missing_by_strategy = {}
+    for name in POTENTIAL_COMBO_STRATEGY_WEIGHTS:
+        selected, missing = _select_strategy_from_base(base, args, name, strategy_top)
+        selected["strategy_weight"] = POTENTIAL_COMBO_STRATEGY_WEIGHTS[name]
+        strategy_frames.append(selected)
+        if missing:
+            missing_by_strategy[name] = missing
+
+    hits = pd.concat(strategy_frames, ignore_index=True) if strategy_frames else pd.DataFrame()
+    base_scored = base.copy()
+    base_scored["growth_score"] = _rank_high(_metric(base_scored, "revenue_yoy").clip(lower=0) + _metric(base_scored, "profit_yoy").clip(lower=0)) * 100
+    base_scored["quality_score"] = (
+        _rank_high(_metric(base_scored, "roe")) * 0.45
+        + _rank_high(_metric(base_scored, "gross_margin")) * 0.30
+        + _reasonable_pe_score(_metric(base_scored, "pe")) * 0.25
+    ) * 100
+    base_scored["risk_control_score"] = (
+        _rank_low(_metric(base_scored, "max_drawdown_252d").abs()) * 0.70
+        + _rank_high(_metric(base_scored, "amount_20d")) * 0.30
+    ) * 100
+    base_scored["liquidity_score"] = _rank_high(_metric(base_scored, "amount_20d")) * 100
+    base_scored["momentum_score"] = _rank_high(_metric(base_scored, "return_60d")) * 100
+
+    total_weight = sum(POTENTIAL_COMBO_STRATEGY_WEIGHTS.values())
+    if hits.empty:
+        base_scored["strategy_hits"] = 0
+        base_scored["matched_strategies"] = ""
+        base_scored["overlap_score"] = 0.0
+    else:
+        hit_summary = (
+            hits.groupby("code", as_index=False)
+            .agg(
+                strategy_hits=("coarse_strategy", "nunique"),
+                matched_strategies=("coarse_strategy_title", lambda values: "、".join(dict.fromkeys(values.astype(str)))),
+                matched_weight=("strategy_weight", "sum"),
+            )
+        )
+        hit_summary["overlap_score"] = hit_summary["matched_weight"] / total_weight * 100
+        base_scored = base_scored.merge(hit_summary[["code", "strategy_hits", "matched_strategies", "overlap_score"]], on="code", how="left")
+        base_scored["strategy_hits"] = base_scored["strategy_hits"].fillna(0).astype(int)
+        base_scored["matched_strategies"] = base_scored["matched_strategies"].fillna("")
+        base_scored["overlap_score"] = base_scored["overlap_score"].fillna(0.0)
+
+    base_scored["combo_score"] = (
+        base_scored["overlap_score"] * 0.35
+        + base_scored["growth_score"] * 0.20
+        + base_scored["quality_score"] * 0.18
+        + base_scored["risk_control_score"] * 0.15
+        + base_scored["liquidity_score"] * 0.07
+        + base_scored["momentum_score"] * 0.05
+    )
+    base_scored["risk_flags"] = base_scored.apply(_row_risk_flags, axis=1)
+    base_scored["combo_reason"] = base_scored.apply(_combo_reason, axis=1)
+    data_notes = []
+    if missing_by_strategy:
+        for name, missing in missing_by_strategy.items():
+            data_notes.append(f"{name}:缺少{','.join(missing)}")
+    base_scored["data_note"] = "完整字段" if not data_notes else "部分策略降级；" + "；".join(data_notes)
+
+    selected = base_scored.sort_values(["combo_score", "overlap_score", "market_cap"], ascending=[False, False, False]).head(args.top).copy()
+    for col in COMBO_OUTPUT_COLUMNS:
+        if col not in selected.columns:
+            selected[col] = pd.NA
+    meta.update(
+        {
+            "strategy": "potential_combo",
+            "strategy_title": "潜力股组合评分",
+            "top": args.top,
+            "combo_strategy_top": strategy_top,
+            "selected": len(selected),
+            "combo_strategies": list(POTENTIAL_COMBO_STRATEGY_WEIGHTS),
+        }
+    )
+    result = selected[COMBO_OUTPUT_COLUMNS]
+    persist_layer_result("combo", args, result, meta)
+    return result, meta
+
+
 def run(args) -> tuple[pd.DataFrame, dict]:
     if args.strategy == "all":
         frames = []
@@ -350,5 +533,9 @@ def run(args) -> tuple[pd.DataFrame, dict]:
             df, one_meta = run_one(args, name)
             frames.append(df)
             meta.update({k: v for k, v in one_meta.items() if k not in {"strategy", "strategy_title", "selected"}})
-        return pd.concat(frames, ignore_index=True), meta
-    return run_one(args, args.strategy)
+        result = pd.concat(frames, ignore_index=True)
+        persist_layer_result("coarse", args, result, meta)
+        return result, meta
+    result, meta = run_one(args, args.strategy)
+    persist_layer_result("coarse", args, result, meta)
+    return result, meta

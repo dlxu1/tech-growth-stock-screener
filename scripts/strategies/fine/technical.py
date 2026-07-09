@@ -7,6 +7,7 @@ import sqlite3
 import pandas as pd
 
 from common import db_path
+from infra.persistence import persist_layer_result
 from strategies.fine import repository as fine_repository
 
 
@@ -293,7 +294,9 @@ def run(args) -> tuple[pd.DataFrame, dict]:
         "min_amount": args.min_amount,
     }
     if coarse.empty:
-        return pd.DataFrame(columns=OUTPUT_COLUMNS), meta
+        result = pd.DataFrame(columns=OUTPUT_COLUMNS)
+        persist_layer_result("fine", args, result, meta)
+        return result, meta
     codes = coarse["code"].astype(str).str.zfill(6).tolist()
     quotes = fine_repository.load_quotes(codes)
     rows = []
@@ -308,4 +311,5 @@ def run(args) -> tuple[pd.DataFrame, dict]:
     result = result[OUTPUT_COLUMNS].sort_values(["technical_score", "coarse_score"], ascending=[False, False])
     selected = result.head(args.top).copy()
     meta.update({"coarse_candidates": len(coarse), "selected": len(selected), "db_path": str(db_path())})
+    persist_layer_result("fine", args, selected, meta)
     return selected, meta

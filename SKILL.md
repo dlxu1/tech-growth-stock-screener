@@ -39,13 +39,17 @@ Use `--no-proxy` when the machine has a system proxy configured but Eastmoney/AK
 
 Use `--source auto` by default. It reads cache first, then tries Sina for realtime market-cap quotes, `efinance`, and AKShare/Eastmoney-compatible financial tables. Use `--source cache` for a strictly offline run from existing CSV cache.
 
+Use `--update-policy auto` for normal research runs when data should be refreshed before screening. It checks the command's required cache tables and only syncs missing or stale datasets. Use `--update-policy cache` for no-network runs, `--update-policy strict` when update failure should stop the command, and `--update-policy refresh` to force-refresh the relevant datasets.
+
+Layer outputs are persisted by default into `layer_runs` and `layer_results`, including screen, coarse, combo, fine, and plan rows. Use `--no-persist-results` only for temporary runs that should not be stored.
+
 ## Workflow
 
-1. Run `scripts/run.py sync` only when fresh source data is needed.
-2. Run `scripts/run.py screen --strategy tech_growth` for the current screen.
-3. Run `scripts/run.py backtest --strategy tech_growth` only after daily prices exist in `quotes_daily`.
+1. Prefer `--update-policy auto` before `screen`, `coarse`, `combo`, `fine`, `plan`, or `visualize` when the user wants current data.
+2. Run `scripts/run.py sync` directly only when a specific dataset or custom date range must be controlled manually.
+3. For CSI 300 workflows, use `--universe csi300`; preflight checks `index_constituents` and, for combo/fine/plan, `quotes_daily`.
 4. If industry-board constituents cannot be fetched, allow the strategy fallback that ranks by financial-report industry plus total market capitalization.
-5. If network or upstream APIs fail, report the exact failing source and suggest rerunning with `--source cache` or `--refresh` later.
+5. If network or upstream APIs fail, report the exact failing source and suggest rerunning with `--update-policy cache`, `--source cache`, `--no-proxy`, or `--update-policy refresh` later.
 6. Present candidates as a ranked research list, including:
    - stock code and name;
    - matched technology industry board;
@@ -54,14 +58,14 @@ Use `--source auto` by default. It reads cache first, then tries Sina for realti
    - why it passed;
    - what would make the candidate weaker.
 7. Present Markdown results as direct numbered items, not a table.
-8. Do not recommend a trade solely from this screen. For specific buy/sell timing, run a separate technical diagnosis.
+8. Do not recommend a trade solely from this screen. For specific buy/sell timing, run `plan`, which still outputs rule-based research plans rather than guaranteed orders.
 
 ## Layered Architecture
 
-- Infrastructure layer: `scripts/infra/`; shared SQLite cache access, network fallback helpers, proxy policy, and logging.
+- Infrastructure layer: `scripts/infra/`; shared SQLite cache access, network fallback helpers, proxy policy, pre-run update checks, and logging.
 - Coarse layer: `scripts/strategies/coarse/`; split into `network.py` for realtime source fetch, `repository.py` for cache-backed data assembly, and `registry.py` for coarse strategy logic.
 - Fine layer: `scripts/strategies/fine/`; split into `network.py` for daily-price refresh hooks, `repository.py` for cached quote reads and coarse-candidate assembly, and `technical.py` for technical scoring logic.
-- Plan layer: `scripts/backtest/plan/` plus `scripts/backtest/trade_plan.py`; split into realtime refresh hooks, cached quote reads, and next-session trade-plan rules.
+- Plan layer: `scripts/plan/`; split into realtime refresh hooks, cached quote reads, and next-session trade-plan rules.
 - Display layer: `scripts/reports/`; render Markdown, JSON, or CSV output. Reports do not fetch remote data.
 - Compatibility layer: `scripts/data/` still exists as a backward-compatible source adapter while the new layer structure is being iterated. New shared cache/network capabilities should go into `scripts/infra/`.
 
@@ -69,7 +73,6 @@ Read `references/data-schema.md` before changing cache schema, source persistenc
 Read `references/architecture.md` before changing layer boundaries, command flow, or cross-layer responsibilities.
 Read `references/coarse-strategies.md` before changing coarse strategy names, weights, or missing-field fallback behavior.
 Read `references/fine-strategies.md` before changing technical indicators, score weights, or reason labels.
-Read `references/backtest-rules.md` before changing backtest assumptions.
 Read `references/trade-plan-rules.md` before changing next-session entry, stop-loss, take-profit, or position rules.
 
 ## Screening Rules
@@ -110,6 +113,13 @@ Run one coarse strategy:
 /Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" coarse --strategy market_cap_reasonable_pe --top 5
 ```
 
+Run potential-stock combo scoring:
+
+```bash
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" combo --top 20 --combo-strategy-top 20 --format markdown
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" combo --top 20 --combo-strategy-top 20 --universe csi300 --source cache --format markdown
+```
+
 Run technical fine screening after all coarse strategies:
 
 ```bash
@@ -126,6 +136,29 @@ Generate next-session trade plans from the five fine-screened stocks:
 
 ```bash
 /Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" plan --coarse-strategy all --coarse-top 5 --top 5 --format markdown
+```
+
+Run CSI 300 combo/fine/plan with automatic pre-run updates:
+
+```bash
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" combo --universe csi300 --top 20 --combo-strategy-top 20 --update-policy auto --format markdown
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" fine --universe csi300 --coarse-strategy all --coarse-top 5 --top 20 --update-policy auto --format markdown
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" plan --universe csi300 --coarse-strategy all --coarse-top 5 --top 5 --update-policy auto --format markdown
+```
+
+Generate a local CSI 300 constituent HTML report:
+
+```bash
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" visualize --dataset index_constituents --index-symbol 000300
+```
+
+Generate local coarse-screening HTML reports:
+
+```bash
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" visualize --dataset coarse --strategy all --top 5 --source cache
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" visualize --dataset combo --top 20 --combo-strategy-top 20 --source cache
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" visualize --dataset coarse --strategy all --top 5 --universe csi300 --source cache --output "$SKILL/.cache/reports/coarse_csi300.html"
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" visualize --dataset combo --top 20 --combo-strategy-top 20 --universe csi300 --source cache --output "$SKILL/.cache/reports/combo_csi300.html"
 ```
 
 Force fresh upstream data:
@@ -158,22 +191,28 @@ Sync source data into SQLite:
 /Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" sync --dataset spot
 ```
 
+Sync CSI 300 constituents into SQLite:
+
+```bash
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" sync --dataset index_constituents --index-symbol 000300
+```
+
 Sync daily prices for explicit symbols:
 
 ```bash
 /Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" sync --dataset daily_prices --codes 600584,000021 --start 2024-01-01 --end 2026-07-08
 ```
 
+Sync recent CSI 300 daily prices:
+
+```bash
+/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" sync --dataset daily_prices --from-index --index-symbol 000300 --start 2026-01-09 --end 2026-07-09 --adjust qfq --source akshare
+```
+
 Sync daily prices for strategy-selected symbols:
 
 ```bash
 /Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" sync --dataset daily_prices --from-strategy --top 10 --start 2024-01-01 --end 2026-07-08
-```
-
-Run the initial backtest scaffold:
-
-```bash
-/Users/xudoulei/Documents/Codex/2026-06-28/new-chat/venv/bin/python "$SKILL/scripts/run.py" backtest --start 2024-01-01 --end 2026-07-08 --top 10
 ```
 
 ## Output Rules

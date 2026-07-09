@@ -11,7 +11,8 @@ import sqlite3
 import pandas as pd
 
 from common import db_path
-from backtest.plan import repository as plan_repository
+from infra.persistence import persist_layer_result
+from plan import repository as plan_repository
 from strategies.fine.technical import run as run_fine
 
 
@@ -255,7 +256,9 @@ def run_trade_plan(args) -> tuple[pd.DataFrame, dict]:
         "db_path": str(db_path()),
     }
     if fine.empty:
-        return pd.DataFrame(columns=OUTPUT_COLUMNS), meta
+        result = pd.DataFrame(columns=OUTPUT_COLUMNS)
+        persist_layer_result("plan", args, result, meta)
+        return result, meta
     codes = fine["code"].astype(str).str.zfill(6).tolist()
     quotes = plan_repository.load_quotes(codes)
     rows = []
@@ -274,4 +277,5 @@ def run_trade_plan(args) -> tuple[pd.DataFrame, dict]:
         "usable_for_plan": int(result["usable_for_plan"].fillna(False).astype(bool).sum()) if "usable_for_plan" in result else 0,
     }
     result = result[OUTPUT_COLUMNS].sort_values(["technical_score", "position_cap"], ascending=[False, False])
+    persist_layer_result("plan", args, result, meta)
     return result, meta

@@ -43,9 +43,7 @@ The coarse layer relies on SQLite cache tables managed by the infrastructure/sou
 - Financial reports are keyed by report date, for example `stock_yjbb_20260331`, so multiple report periods can coexist.
 - Spot quote, board list, and board-constituent raw source tables are cached by logical source key. Re-fetching with the same key refreshes the current raw snapshot.
 - Daily quote metrics are derived from `quotes_daily`, which keeps historical bars by stock code and trade date.
-- Coarse screen outputs are not currently persisted as historical runs.
-
-If coarse result history is needed, add `coarse_runs` and `coarse_results` tables instead of overloading raw source tables.
+- Coarse screen outputs are persisted to `layer_runs` and `layer_results`. The complete output row is stored in `layer_results.row_json`.
 
 ## Base Universe Assembly
 
@@ -93,6 +91,36 @@ Implemented strategies:
 - `price_strength_market_cap`: 价格强势 + 市值前排
 - `low_drawdown_positive_growth`: 回撤较小 + 正增长
 - `industry_breadth_leaders`: 行业景气扩散粗筛
+
+## Potential Combo Scoring
+
+`scripts/run.py combo` runs a focused aggregation for finding potential stocks while avoiding obvious risk names. It does not replace the single coarse strategies; it summarizes several stronger, commonly used screens into one ranked list.
+
+Component strategies:
+
+- `market_cap_revenue_profit_growth`: growth leadership.
+- `high_roe_reasonable_pe`: quality and valuation.
+- `high_gross_margin_revenue_growth`: product margin and demand.
+- `low_drawdown_positive_growth`: risk control.
+- `active_amount_solid_fundamentals`: liquidity and acceptable fundamentals.
+- `price_strength_market_cap`: market confirmation.
+
+Final score weights:
+
+- strategy overlap: 35%;
+- growth score: 20%;
+- quality score: 18%;
+- risk-control score: 15%;
+- liquidity score: 7%;
+- momentum score: 5%.
+
+Default command:
+
+```bash
+python scripts/run.py combo --top 20 --combo-strategy-top 20
+```
+
+Use this output as a research watchlist. A stock that appears across multiple component strategies and also has acceptable risk flags is more credible than a stock ranked highly by one isolated factor.
 
 ## Ranking Rules
 

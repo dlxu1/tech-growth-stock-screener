@@ -23,10 +23,9 @@ env/
 # Local runtime output
 .tech_growth_runtime/
 .tech_growth_arch_test_cache/
-reports/
+/reports/
 
 # OS/editor files
 .DS_Store
 .idea/
 .vscode/
-

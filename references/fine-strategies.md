@@ -11,8 +11,10 @@ The layer is split into:
 - `scripts/strategies/fine/network.py`: optional daily-price refresh hook.
 - `scripts/strategies/fine/repository.py`: loads coarse candidates and cached daily quotes.
 - `scripts/strategies/fine/technical.py`: computes indicators, scores candidates, and assigns reason labels.
+- `scripts/reports/fine_html.py`: renders fine-screen results as a static local HTML report.
 
 Fine strategies must not fetch remote data directly. They should read from `quotes_daily` through the repository/cache boundary.
+The HTML report must not change scoring, sorting, or missing-data behavior; it only renders the dataframe returned by `technical.py`.
 
 ## Input Data
 
@@ -43,16 +45,10 @@ If no daily bars exist for a stock, the stock stays visible but receives score 0
 
 ## Cache Behavior
 
-Fine screening does not persist its own historical scoring results today.
-
 - Historical OHLCV bars are retained in `quotes_daily`.
 - Technical indicators are recomputed on each run.
-- `technical_score`, `technical_reasons`, and the fine-ranked stock list are not currently written to SQLite.
-
-If fine-score history is needed, add:
-
-- `fine_runs`: one row per fine-screen execution.
-- `fine_results`: one row per stock per run, including indicator values, score, reason labels, data status, and coarse-source metadata.
+- Fine screening outputs are persisted to `layer_runs` and `layer_results`.
+- `layer_results.row_json` stores the complete fine-screen row, including indicator values, score, reason labels, data status, and coarse-source metadata.
 
 ## Indicator Set
 
@@ -191,4 +187,16 @@ Run strictly from existing cache:
 
 ```bash
 python scripts/run.py fine --coarse-strategy all --coarse-top 5 --top 10 --source cache
+```
+
+Run fine screening on cached CSI 300 constituents:
+
+```bash
+python scripts/run.py fine --coarse-strategy all --coarse-top 5 --top 20 --universe csi300 --source cache
+```
+
+Generate a local fine-screen HTML report:
+
+```bash
+python scripts/run.py visualize --dataset fine --coarse-strategy all --coarse-top 5 --top 20 --universe csi300 --source cache --output .cache/reports/fine_csi300.html
 ```

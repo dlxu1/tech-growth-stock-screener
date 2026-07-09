@@ -8,10 +8,13 @@
 
 - 科技股候选池构建：按科技行业/板块关键词筛选 A 股科技方向股票。
 - 粗筛策略：基于市值、估值、成长、盈利、研发、成交额、价格强度、回撤等指标，每个策略默认保留 5 支股票。
+- 组合评分：聚合成长、质量、风控、流动性和市场确认策略，输出潜力股研究清单。
 - 细筛策略：读取日线行情，计算 MA、MACD、RSI、成交额放大、突破、回撤、ATR 等技术指标，并输出技术评分。
 - 计划层：根据细筛结果生成下一交易日规则计划，包括突破价、回踩区间、放量阈值、计划入场价、初始止损、止盈、移动止损和仓位上限。
 - SQLite 缓存：远程数据和日线行情会缓存到本地数据库，支持离线复用。
+- 按需更新：筛选、细筛、计划和可视化命令可用 `--update-policy` 在运行前自动检查并增量更新必要数据。
 - 多格式输出：支持 Markdown、JSON、CSV。
+- 本地可视化：支持从 SQLite 生成指数成分股 HTML 报表。
 - 数据质量诊断：输出缺失数据原因以及对评分和操作计划的影响。
 
 ## 架构图
@@ -23,7 +26,6 @@ flowchart TD
   CLI --> Fine["fine 细筛"]
   CLI --> Plan["plan 计划"]
   CLI --> Screen["screen 严格筛选"]
-  CLI --> Backtest["backtest 回测骨架"]
 
   Sync --> Sources["data/sources.py 源适配"]
   Sources --> Cache["infra/cache.py + SQLite"]
@@ -31,7 +33,7 @@ flowchart TD
 
   Coarse --> CoarseLayer["strategies/coarse"]
   Fine --> FineLayer["strategies/fine"]
-  Plan --> PlanLayer["backtest/plan + trade_plan.py"]
+  Plan --> PlanLayer["plan/trade_plan.py"]
 
   CoarseLayer --> DB
   FineLayer --> DB
@@ -49,16 +51,16 @@ flowchart TD
 scripts/
   run.py                 # 统一 CLI 入口
   common.py              # 通用配置、代理、字段处理
-  infra/                 # 基建层：缓存、网络策略、日志
+  infra/                 # 基建层：缓存、网络策略、预更新、日志
   data/                  # 兼容源适配层：AKShare/Sina/efinance/Eastmoney/CSV
   strategies/
     tech_growth.py       # 原始严格筛选策略
     coarse/              # 粗筛层：候选池 + 多策略评分
     fine/                # 细筛层：技术指标评分
-  backtest/
-    engine.py            # 等权回测骨架
+  plan/
     trade_plan.py        # 下一交易日计划逻辑
-    plan/                # 计划层 repository/network 边界
+    repository.py        # 计划层缓存读取
+    network.py           # 计划层数据刷新 hook
   reports/               # 展示层
 references/              # 架构、schema、策略和计划规则文档
 ```
@@ -70,7 +72,7 @@ references/              # 架构、schema、策略和计划规则文档
 ```bash
 python -m venv venv
 source venv/bin/activate
-pip install pandas requests akshare efinance
+pip install pandas requests akshare efinance baostock
 ```
 
 如需更完整运行环境，可根据实际报错补充安装 `numpy`、`rich` 等依赖。
@@ -86,32 +88,93 @@ python scripts/run.py sync --dataset financials --report-date 20260331
 
 ```bash
 python scripts/run.py sync --dataset daily_prices --codes 600584,000021 --start 2024-01-01 --end 2026-07-08
+python scripts/run.py sync --dataset daily_prices --from-index --index-symbol 000300 --start 2026-01-09 --end 2026-07-09 --adjust qfq --source auto --no-proxy
+python scripts/run.py sync --dataset daily_prices --from-index --index-symbol 000300 --start 2026-01-09 --end 2026-07-09 --adjust qfq --source auto --no-proxy --skip-existing
 ```
 
-### 3. 运行粗筛
+同步沪深 300 成分股：
+
+```bash
+python scripts/run.py sync --dataset index_constituents --index-symbol 000300
+```
+
+### 3. 按需更新后运行
+
+旧行为默认保持不变：不加 `--update-policy` 时，命令仍按已有缓存和 `--source` 行为运行。
+
+日常研究推荐：
+
+```bash
+python scripts/run.py combo --universe csi300 --top 20 --combo-strategy-top 20 --update-policy auto --format markdown
+python scripts/run.py fine --universe csi300 --coarse-strategy all --coarse-top 5 --top 20 --update-policy auto --format markdown
+python scripts/run.py plan --universe csi300 --coarse-strategy all --coarse-top 5 --top 5 --update-policy auto --format markdown
+```
+
+`--update-policy` 可选：
+
+- `none`：默认值，不做预更新。
+- `cache`：强制离线缓存模式，不联网。
+- `auto`：检查所需数据，缺失或过期时增量同步；同步失败时继续用缓存并在 stderr 记录原因。
+- `strict`：和 `auto` 类似，但必要数据更新失败会中止命令。
+- `refresh`：强制刷新当前命令依赖的数据。
+
+可用 `--update-start`、`--update-end` 控制日线更新区间；不指定时默认更新最近 180 天，`--update-end` 默认为当天。
+
+### 4. 运行粗筛
 
 ```bash
 python scripts/run.py coarse --strategy all --top 5 --format markdown
+python scripts/run.py coarse --strategy all --top 5 --universe csi300 --source cache --format markdown
 ```
 
-### 4. 运行细筛
+### 5. 运行细筛
 
 ```bash
 python scripts/run.py fine --coarse-strategy all --coarse-top 5 --top 10 --format markdown
 ```
 
-### 5. 生成下一交易日计划
+### 6. 运行潜力股组合评分
+
+```bash
+python scripts/run.py combo --top 20 --combo-strategy-top 20 --format markdown
+python scripts/run.py combo --top 20 --combo-strategy-top 20 --universe csi300 --source cache --format markdown
+```
+
+### 7. 生成下一交易日计划
 
 ```bash
 python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --format markdown
 ```
 
-### 6. 离线运行
+### 8. 离线运行
 
 如果已有缓存，可使用：
 
 ```bash
 python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --source cache
+python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --update-policy cache
+```
+
+### 9. 生成本地可视化报表
+
+```bash
+python scripts/run.py visualize --dataset index_constituents --index-symbol 000300
+python scripts/run.py visualize --dataset coarse --strategy all --top 5 --source cache
+python scripts/run.py visualize --dataset combo --top 20 --combo-strategy-top 20 --source cache
+python scripts/run.py visualize --dataset coarse --strategy all --top 5 --universe csi300 --source cache --output .cache/reports/coarse_csi300.html
+python scripts/run.py visualize --dataset combo --top 20 --combo-strategy-top 20 --universe csi300 --source cache --output .cache/reports/combo_csi300.html
+python scripts/run.py visualize --dataset fine --coarse-strategy all --coarse-top 5 --top 20 --universe csi300 --source cache --output .cache/reports/fine_csi300.html
+```
+
+默认输出到：
+
+```text
+.cache/reports/index_constituents_000300.html
+.cache/reports/coarse_all.html
+.cache/reports/combo.html
+.cache/reports/coarse_csi300.html
+.cache/reports/combo_csi300.html
+.cache/reports/fine_csi300.html
 ```
 
 ## 数据缓存
@@ -137,7 +200,18 @@ export TECH_GROWTH_SCREENER_CACHE=/path/to/cache
 - `market_cap_snapshot`：市值快照。
 - `financial_reports`：财报字段。
 - `industry_members`：行业/板块成分。
+- `index_constituents`：指数成分股池，例如沪深 300 成分和权重。
 - `quotes_daily`：日线 OHLCV。
+- `layer_runs`：每次 screen、coarse、combo、fine、plan 运行的参数、元信息和行数。
+- `layer_results`：每次层输出的完整逐行 JSON 快照，并冗余 code、name、rank、score、action 等常用查询字段。
+
+预更新依赖：
+
+- 粗筛和组合评分需要 spot、财报业绩和候选池；沪深 300 池还需要 `index_constituents`。
+- 组合评分、细筛和计划会使用 `quotes_daily`；`--universe csi300 --update-policy auto` 会按沪深 300 成分股做最近 180 天的断点续跑。
+- 科技关键词池仍使用行业板块缓存；自动日线补齐目前主要面向已缓存的沪深 300 指数池。
+
+策略层结果默认会落库。若只想临时查看输出、不保存本次结果，可加 `--no-persist-results`。
 
 ## 网络和代理
 
@@ -190,7 +264,6 @@ python scripts/run.py coarse --strategy all --proxy http://127.0.0.1:7890
 - [粗筛策略](references/coarse-strategies.md)
 - [细筛策略](references/fine-strategies.md)
 - [计划层规则](references/trade-plan-rules.md)
-- [回测规则](references/backtest-rules.md)
 - [筛选规则](references/screening-rules.md)
 
 ## 开源前建议
@@ -206,4 +279,3 @@ python scripts/run.py coarse --strategy all --proxy http://127.0.0.1:7890
 ## 免责声明
 
 本项目仅用于公开数据研究、策略实验和工程学习。输出内容不构成投资建议。股票市场存在风险，任何交易决策都应结合个人风险承受能力、资金管理和独立判断。
-

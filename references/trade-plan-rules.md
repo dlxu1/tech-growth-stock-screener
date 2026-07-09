@@ -8,9 +8,9 @@ The plan layer turns fine-screened candidates into next-session rule plans. It d
 
 The layer is split into:
 
-- `scripts/backtest/plan/network.py`: optional refresh hook for data needed by plans.
-- `scripts/backtest/plan/repository.py`: reads cached daily quotes from `quotes_daily`.
-- `scripts/backtest/trade_plan.py`: computes actions, entry levels, stop levels, take-profit levels, position caps, and data-quality diagnostics.
+- `scripts/plan/network.py`: optional refresh hook for data needed by plans.
+- `scripts/plan/repository.py`: reads cached daily quotes from `quotes_daily`.
+- `scripts/plan/trade_plan.py`: computes actions, entry levels, stop levels, take-profit levels, position caps, and data-quality diagnostics.
 - `scripts/reports/trade_plan_markdown.py`: renders plan output and diagnostics.
 
 The plan is a ruleset for the next trading session, not a guaranteed execution instruction.
@@ -40,16 +40,10 @@ Required fine-screen fields:
 
 The plan layer consumes historical daily bars from `quotes_daily`.
 
-It does not currently persist plan outputs. This means:
+Plan outputs are persisted to `layer_runs` and `layer_results`.
 
-- entry levels are recomputed on each run;
-- stop levels are recomputed on each run;
-- action labels and data diagnostics are not stored as historical plan snapshots.
-
-If plan history is needed, add:
-
-- `plan_runs`: one row per plan execution.
-- `plan_results`: one row per stock per run, including entry, stop, take-profit, position cap, action, strategy label, and data-quality fields.
+- Entry levels, stop levels, action labels, and data diagnostics are stored as historical snapshots.
+- `layer_results.row_json` stores the complete plan row, including entry, stop, take-profit, position cap, action, strategy label, and data-quality fields.
 
 ## Action Selection
 

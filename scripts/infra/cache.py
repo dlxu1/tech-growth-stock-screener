@@ -39,6 +39,8 @@ def read_quotes_daily(codes: list[str], columns: list[str] | None = None) -> pd.
         )
     except Exception:
         return pd.DataFrame(columns=selected)
+    finally:
+        conn.close()
     if prices.empty:
         return prices
     prices["code"] = prices["code"].astype(str).str.zfill(6)
@@ -71,13 +73,44 @@ def read_price_metrics(codes: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def read_index_constituents(index_symbol: str = "000300", constituent_date: str = "latest") -> pd.DataFrame:
+    conn = sqlite3.connect(db_path())
+    try:
+        index_symbol = str(index_symbol).strip() or "000300"
+        if constituent_date == "latest":
+            row = conn.execute(
+                "select max(constituent_date) from index_constituents where index_symbol=?",
+                (index_symbol,),
+            ).fetchone()
+            constituent_date = row[0] if row and row[0] else ""
+        if not constituent_date:
+            return pd.DataFrame(columns=["index_symbol", "index_name", "constituent_date", "code", "name", "exchange", "weight", "weight_date"])
+        df = pd.read_sql_query(
+            """
+            select index_symbol, index_name, constituent_date, code, name, exchange, weight, weight_date, source, updated_at
+            from index_constituents
+            where index_symbol=? and constituent_date=?
+            order by code
+            """,
+            conn,
+            params=(index_symbol, constituent_date),
+        )
+    except Exception:
+        return pd.DataFrame(columns=["index_symbol", "index_name", "constituent_date", "code", "name", "exchange", "weight", "weight_date"])
+    finally:
+        conn.close()
+    if not df.empty:
+        df["code"] = df["code"].astype(str).str.zfill(6)
+    return df
+
+
 __all__ = [
     "connect",
     "database_path",
     "read_cached_source",
+    "read_index_constituents",
     "read_price_metrics",
     "read_quotes_daily",
     "write_quotes_daily",
     "write_source_table",
 ]
-

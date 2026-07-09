@@ -8,6 +8,7 @@ This module remains as a compatibility adapter for existing fetch functions.
 from __future__ import annotations
 
 import math
+import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -17,7 +18,7 @@ import pandas as pd
 import requests
 
 from common import cache_dir, db_path, find_col, normalize_code, report_date_candidates, source_chain, to_number
-from data.db import connect, read_cached_source, write_quotes_daily, write_source_table
+from data.db import connect, read_cached_source, write_index_constituents, write_quotes_daily, write_source_table
 
 
 def run_fetchers(label: str, fetchers: list[tuple[str, Callable[[], pd.DataFrame]]]) -> tuple[pd.DataFrame, str]:
@@ -35,18 +36,21 @@ def run_fetchers(label: str, fetchers: list[tuple[str, Callable[[], pd.DataFrame
 
 def cached_source_table(table_key: str, legacy_csv: str, refresh: bool, fetcher: Callable[[], tuple[pd.DataFrame, str]]) -> tuple[pd.DataFrame, str]:
     conn = connect()
-    if not refresh:
-        cached = read_cached_source(conn, table_key)
-        if cached is not None:
-            return cached, f"db:{table_key}"
-        legacy_path = cache_dir() / legacy_csv
-        if legacy_path.exists():
-            df = pd.read_csv(legacy_path, dtype={"代码": str, "code": str, "股票代码": str})
-            write_source_table(conn, table_key, f"legacy-csv:{legacy_csv}", df)
-            return df, f"db:{table_key}"
-    df, source = fetcher()
-    write_source_table(conn, table_key, source, df)
-    return df, source
+    try:
+        if not refresh:
+            cached = read_cached_source(conn, table_key)
+            if cached is not None:
+                return cached, f"db:{table_key}"
+            legacy_path = cache_dir() / legacy_csv
+            if legacy_path.exists():
+                df = pd.read_csv(legacy_path, dtype={"代码": str, "code": str, "股票代码": str})
+                write_source_table(conn, table_key, f"legacy-csv:{legacy_csv}", df)
+                return df, f"db:{table_key}"
+        df, source = fetcher()
+        write_source_table(conn, table_key, source, df)
+        return df, source
+    finally:
+        conn.close()
 
 
 def disable_efinance_proxy(no_proxy: bool) -> None:
@@ -347,6 +351,95 @@ def normalize_financials(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def normalize_index_constituents(constituents: pd.DataFrame, weights: pd.DataFrame | None, index_symbol: str) -> pd.DataFrame:
+    code_col = find_col(constituents.columns, ["成分券代码", "证券代码", "股票代码", "代码", "code"], contains_all=["代码"])
+    name_col = find_col(constituents.columns, ["成分券名称", "证券简称", "股票简称", "名称", "name"])
+    date_col = find_col(constituents.columns, ["日期", "date", "trade_date"])
+    index_name_col = find_col(constituents.columns, ["指数名称", "index_name"])
+    exchange_col = find_col(constituents.columns, ["交易所", "exchange"])
+    if not code_col or not date_col:
+        raise RuntimeError(f"Cannot find index constituent columns: code={code_col}, date={date_col}, columns={list(constituents.columns)}")
+
+    out = constituents[[code_col, date_col] + [col for col in [name_col, index_name_col, exchange_col] if col]].copy()
+    rename = {code_col: "code", date_col: "constituent_date"}
+    if name_col:
+        rename[name_col] = "name"
+    if index_name_col:
+        rename[index_name_col] = "index_name"
+    if exchange_col:
+        rename[exchange_col] = "exchange"
+    out = out.rename(columns=rename)
+    out["index_symbol"] = index_symbol
+    out["code"] = out["code"].map(normalize_code)
+    out["constituent_date"] = pd.to_datetime(out["constituent_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "index_name" not in out.columns:
+        out["index_name"] = ""
+    if "name" not in out.columns:
+        out["name"] = ""
+    if "exchange" not in out.columns:
+        out["exchange"] = ""
+
+    if weights is not None and not weights.empty:
+        weight_code_col = find_col(weights.columns, ["成分券代码", "证券代码", "股票代码", "代码", "code"], contains_all=["代码"])
+        weight_col = find_col(weights.columns, ["权重", "weight"], contains_all=["权重"])
+        weight_date_col = find_col(weights.columns, ["日期", "date", "trade_date"])
+        if weight_code_col and weight_col:
+            weight_frame = weights[[weight_code_col, weight_col] + ([weight_date_col] if weight_date_col else [])].copy()
+            weight_frame = weight_frame.rename(columns={weight_code_col: "code", weight_col: "weight"})
+            if weight_date_col:
+                weight_frame = weight_frame.rename(columns={weight_date_col: "weight_date"})
+            else:
+                weight_frame["weight_date"] = ""
+            weight_frame["code"] = weight_frame["code"].map(normalize_code)
+            weight_frame["weight"] = weight_frame["weight"].map(to_number)
+            weight_frame["weight_date"] = pd.to_datetime(weight_frame["weight_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            out = out.merge(weight_frame[["code", "weight", "weight_date"]], on="code", how="left")
+    if "weight" not in out.columns:
+        out["weight"] = float("nan")
+    if "weight_date" not in out.columns:
+        out["weight_date"] = ""
+    return out.dropna(subset=["constituent_date", "code"]).drop_duplicates(["index_symbol", "constituent_date", "code"])
+
+
+def load_index_constituents(index_symbol: str, refresh: bool, no_proxy: bool, source: str) -> tuple[pd.DataFrame, str]:
+    import akshare as ak
+
+    index_symbol = str(index_symbol).strip() or "000300"
+
+    def _fetch_constituents() -> tuple[pd.DataFrame, str]:
+        fetchers: list[tuple[str, Callable[[], pd.DataFrame]]] = []
+        for name in source_chain(source, ["akshare"]):
+            if name == "akshare":
+                fetchers.append(("akshare-csindex", lambda: ak.index_stock_cons_csindex(symbol=index_symbol)))
+        return run_fetchers(f"index constituents {index_symbol}", fetchers)
+
+    def _fetch_weights() -> tuple[pd.DataFrame, str]:
+        fetchers: list[tuple[str, Callable[[], pd.DataFrame]]] = []
+        for name in source_chain(source, ["akshare"]):
+            if name == "akshare":
+                fetchers.append(("akshare-csindex-weight", lambda: ak.index_stock_cons_weight_csindex(symbol=index_symbol)))
+        return run_fetchers(f"index constituent weights {index_symbol}", fetchers)
+
+    constituents, constituent_source = cached_source_table(
+        f"index_cons_{index_symbol}",
+        f"index_cons_{index_symbol}.csv",
+        refresh,
+        _fetch_constituents,
+    )
+    try:
+        weights, weight_source = cached_source_table(
+            f"index_cons_weight_{index_symbol}",
+            f"index_cons_weight_{index_symbol}.csv",
+            refresh,
+            _fetch_weights,
+        )
+        used_source = f"{constituent_source}+{weight_source}"
+    except Exception:
+        weights = pd.DataFrame()
+        used_source = constituent_source
+    return normalize_index_constituents(constituents, weights, index_symbol), used_source
+
+
 def market_symbol(code: str) -> str:
     code = normalize_code(code)
     if code.startswith(("6", "9")):
@@ -427,49 +520,123 @@ def fetch_daily_prices_efinance(code: str, start: str, end: str, adjust: str, no
     return ef.stock.get_quote_history(normalize_code(code), beg=compact_date(start), end=compact_date(end), klt=101, fqt=fqt)
 
 
-def sync_daily_prices(codes: list[str], start: str, end: str, refresh: bool, no_proxy: bool, source: str, adjust: str) -> dict:
+def baostock_symbol(code: str) -> str:
+    code = normalize_code(code)
+    if code.startswith(("6", "9")):
+        return f"sh.{code}"
+    if code.startswith(("0", "2", "3")):
+        return f"sz.{code}"
+    raise RuntimeError(f"baostock daily source does not support symbol {code}")
+
+
+def fetch_daily_prices_baostock(code: str, start: str, end: str, adjust: str, no_proxy: bool) -> pd.DataFrame:
+    import baostock as bs
+
+    adjustflag = {"": "3", "qfq": "2", "hfq": "1"}.get(adjust, "2")
+    fields = "date,code,open,high,low,close,volume,amount"
+    login_result = bs.login()
+    if getattr(login_result, "error_code", "0") != "0":
+        raise RuntimeError(f"baostock login failed: {getattr(login_result, 'error_msg', '')}")
+    try:
+        rs = bs.query_history_k_data_plus(
+            baostock_symbol(code),
+            fields,
+            start_date=start,
+            end_date=end,
+            frequency="d",
+            adjustflag=adjustflag,
+        )
+        if getattr(rs, "error_code", "0") != "0":
+            raise RuntimeError(f"baostock query failed: {getattr(rs, 'error_msg', '')}")
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        return pd.DataFrame(rows, columns=rs.fields)
+    finally:
+        bs.logout()
+
+
+def cached_daily_prices_cover_range(conn, code: str, start: str, end: str) -> tuple[bool, dict]:
+    row = conn.execute(
+        """
+        select min(trade_date), max(trade_date), count(*)
+        from quotes_daily
+        where code=? and trade_date>=? and trade_date<=?
+        """,
+        (normalize_code(code), start, end),
+    ).fetchone()
+    first_date, last_date, rows = row if row else (None, None, 0)
+    covered = bool(rows and first_date and last_date and first_date <= start and last_date >= end)
+    return covered, {"cached_rows": int(rows or 0), "cached_start": first_date, "cached_end": last_date}
+
+
+def sync_daily_prices(
+    codes: list[str],
+    start: str,
+    end: str,
+    refresh: bool,
+    no_proxy: bool,
+    source: str,
+    adjust: str,
+    skip_existing: bool = False,
+) -> dict:
     if not codes:
         raise RuntimeError("daily_prices sync requires at least one code")
     conn = connect()
     normalized_frames = []
     per_symbol = []
-    for code in [normalize_code(c) for c in codes if str(c).strip()]:
-        fetchers: list[tuple[str, Callable[[], pd.DataFrame]]] = []
-        if source == "cache":
-            legacy_path = cache_dir() / f"daily_prices_{code}.csv"
-            if legacy_path.exists():
-                fetchers.append((f"legacy-csv:daily_prices_{code}.csv", lambda legacy_path=legacy_path: pd.read_csv(legacy_path, dtype={"code": str})))
-        for name in source_chain(source, ["sina", "akshare", "efinance"]):
-            if name == "sina":
-                fetchers.append(("sina-daily", lambda code=code: fetch_daily_prices_sina(code, start, end, adjust, no_proxy)))
-            elif name == "akshare":
-                fetchers.append(("akshare-hist", lambda code=code: fetch_daily_prices_akshare(code, start, end, adjust, no_proxy)))
-            elif name == "efinance":
-                fetchers.append(("efinance-history", lambda code=code: fetch_daily_prices_efinance(code, start, end, adjust, no_proxy)))
-        try:
-            raw, used_source = run_fetchers(f"daily prices for {code}", fetchers)
-            raw_key = f"daily_prices_{code}_{start}_{end}_{adjust or 'none'}"
-            write_source_table(conn, raw_key, used_source, raw)
-            normalized = normalize_daily_prices(raw, code, used_source)
-            normalized = normalized[(normalized["trade_date"] >= start) & (normalized["trade_date"] <= end)].copy()
-            rows = write_quotes_daily(conn, normalized, used_source)
-            normalized_frames.append(normalized)
-            per_symbol.append({"code": code, "source": used_source, "rows": rows, "status": "ok"})
-        except Exception as exc:
-            per_symbol.append({"code": code, "rows": 0, "status": "error", "error": str(exc)})
-            if refresh:
-                raise
-    total_rows = int(sum(item["rows"] for item in per_symbol))
-    return {
-        "dataset": "daily_prices",
-        "start": start,
-        "end": end,
-        "adjust": adjust,
-        "symbols": len(per_symbol),
-        "rows": total_rows,
-        "db_path": str(db_path()),
-        "details": per_symbol,
-    }
+    try:
+        normalized_codes = [normalize_code(c) for c in codes if str(c).strip()]
+        for idx, code in enumerate(normalized_codes, start=1):
+            if skip_existing:
+                covered, cache_info = cached_daily_prices_cover_range(conn, code, start, end)
+                if covered:
+                    print(f"[daily_prices] {idx}/{len(normalized_codes)} skipping {code} (cached)", file=sys.stderr, flush=True)
+                    per_symbol.append({"code": code, "rows": 0, "status": "skipped", **cache_info})
+                    continue
+            print(f"[daily_prices] {idx}/{len(normalized_codes)} syncing {code}", file=sys.stderr, flush=True)
+            fetchers: list[tuple[str, Callable[[], pd.DataFrame]]] = []
+            if source == "cache":
+                legacy_path = cache_dir() / f"daily_prices_{code}.csv"
+                if legacy_path.exists():
+                    fetchers.append((f"legacy-csv:daily_prices_{code}.csv", lambda legacy_path=legacy_path: pd.read_csv(legacy_path, dtype={"code": str})))
+            for name in source_chain(source, ["efinance", "akshare", "sina", "baostock"]):
+                if name == "efinance":
+                    fetchers.append(("efinance-history", lambda code=code: fetch_daily_prices_efinance(code, start, end, adjust, no_proxy)))
+                elif name == "akshare":
+                    fetchers.append(("akshare-hist", lambda code=code: fetch_daily_prices_akshare(code, start, end, adjust, no_proxy)))
+                elif name == "sina":
+                    fetchers.append(("sina-daily", lambda code=code: fetch_daily_prices_sina(code, start, end, adjust, no_proxy)))
+                elif name == "baostock":
+                    fetchers.append(("baostock-history", lambda code=code: fetch_daily_prices_baostock(code, start, end, adjust, no_proxy)))
+            try:
+                raw, used_source = run_fetchers(f"daily prices for {code}", fetchers)
+                raw_key = f"daily_prices_{code}_{start}_{end}_{adjust or 'none'}"
+                write_source_table(conn, raw_key, used_source, raw)
+                normalized = normalize_daily_prices(raw, code, used_source)
+                normalized = normalized[(normalized["trade_date"] >= start) & (normalized["trade_date"] <= end)].copy()
+                rows = write_quotes_daily(conn, normalized, used_source)
+                normalized_frames.append(normalized)
+                per_symbol.append({"code": code, "source": used_source, "rows": rows, "status": "ok"})
+            except Exception as exc:
+                per_symbol.append({"code": code, "rows": 0, "status": "error", "error": str(exc)})
+                if refresh:
+                    raise
+        total_rows = int(sum(item["rows"] for item in per_symbol))
+        skipped = int(sum(1 for item in per_symbol if item["status"] == "skipped"))
+        return {
+            "dataset": "daily_prices",
+            "start": start,
+            "end": end,
+            "adjust": adjust,
+            "symbols": len(per_symbol),
+            "rows": total_rows,
+            "skipped": skipped,
+            "db_path": str(db_path()),
+            "details": per_symbol,
+        }
+    finally:
+        conn.close()
 
 
 def sync_dataset(
@@ -482,6 +649,8 @@ def sync_dataset(
     start: str | None = None,
     end: str | None = None,
     adjust: str = "qfq",
+    index_symbol: str = "000300",
+    skip_existing: bool = False,
 ) -> dict:
     if dataset == "spot":
         df, used_source = load_spot(refresh, no_proxy, source)
@@ -492,8 +661,28 @@ def sync_dataset(
     if dataset == "industry_boards":
         df = load_industry_boards(refresh, no_proxy, source)
         return {"dataset": dataset, "rows": len(df), "db_path": str(db_path())}
+    if dataset == "index_constituents":
+        df, used_source = load_index_constituents(index_symbol, refresh, no_proxy, source)
+        conn = connect()
+        try:
+            rows = write_index_constituents(conn, df, used_source)
+        finally:
+            conn.close()
+        latest_date = "" if df.empty else str(df["constituent_date"].max())
+        weight_date = "" if df.empty or "weight_date" not in df.columns else str(df["weight_date"].dropna().max())
+        index_name = "" if df.empty or "index_name" not in df.columns else str(df["index_name"].dropna().iloc[0])
+        return {
+            "dataset": dataset,
+            "index_symbol": index_symbol,
+            "index_name": index_name,
+            "source": used_source,
+            "constituent_date": latest_date,
+            "weight_date": weight_date,
+            "rows": rows,
+            "db_path": str(db_path()),
+        }
     if dataset == "daily_prices":
         if not start or not end:
             raise RuntimeError("daily_prices sync requires --start and --end")
-        return sync_daily_prices(codes or [], start, end, refresh, no_proxy, source, adjust)
+        return sync_daily_prices(codes or [], start, end, refresh, no_proxy, source, adjust, skip_existing)
     raise RuntimeError(f"Unsupported dataset: {dataset}")

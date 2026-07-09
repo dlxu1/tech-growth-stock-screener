@@ -1,4 +1,4 @@
-"""Cache-facing data assembly for next-session plans."""
+"""Cache-facing data assembly for next-session trade plans."""
 
 from __future__ import annotations
 
@@ -9,4 +9,3 @@ from infra.cache import read_quotes_daily
 
 def load_quotes(codes: list[str]) -> pd.DataFrame:
     return read_quotes_daily(codes)
-

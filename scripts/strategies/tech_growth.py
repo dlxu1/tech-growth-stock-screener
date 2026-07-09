@@ -12,6 +12,7 @@ from data.sources import (
     load_spot,
     normalize_financials,
 )
+from infra.persistence import persist_layer_result
 
 
 def build_report_industry_universe(spot: pd.DataFrame, fin: pd.DataFrame, keywords: list[str]) -> tuple[pd.DataFrame, int]:
@@ -115,5 +116,6 @@ def run(args) -> tuple[pd.DataFrame, SourceStats]:
         after_rank_gate=len(ranked),
         after_growth_gate=len(passed),
     )
-    return passed[cols].head(args.top), stats
-
+    selected = passed[cols].head(args.top)
+    persist_layer_result("screen", args, selected, stats)
+    return selected, stats
