@@ -171,6 +171,8 @@ def _plan_one(row, group: pd.DataFrame, args) -> dict:
         planned_entry = (pullback_low + pullback_high) / 2
     elif strategy == "volume_confirm_buy":
         planned_entry = latest_close * (1 + args.breakout_buffer)
+    elif strategy in {"watch", "no_trade"}:
+        planned_entry = breakout_trigger
     else:
         planned_entry = float("nan")
 
@@ -194,6 +196,8 @@ def _plan_one(row, group: pd.DataFrame, args) -> dict:
         cancel_conditions.append("回踩跌破 MA20 后不能快速收回则不买")
     if strategy == "breakout_buy":
         cancel_conditions.append("突破后跌回突破价下方且放量转弱则撤单")
+    if strategy in {"watch", "no_trade"}:
+        cancel_conditions.append("技术分未修复或量价未确认前不执行买入")
 
     stop_conditions = [
         "买入后跌破初始止损价立即止损",
@@ -206,6 +210,9 @@ def _plan_one(row, group: pd.DataFrame, args) -> dict:
     data_status = "complete"
     missing_data_reason = "无关键数据缺失。"
     missing_data_impact = "可生成完整入场、止损、止盈和仓位规则。"
+    if strategy in {"watch", "no_trade"}:
+        note = "观察参考价位，仅用于判断量价是否修复，不构成买入指令；" + note
+        missing_data_impact = "行情完整，可生成观察参考价、风控价和风险距离，但当前技术状态不足以形成可执行买入计划。"
     if len(group) < 20:
         data_status = "degraded_short_history"
         missing_data_reason = f"quotes_daily 仅有 {len(group)} 个交易日，少于20日指标窗口。"
@@ -238,13 +245,17 @@ def _plan_one(row, group: pd.DataFrame, args) -> dict:
         "data_status": data_status,
         "missing_data_reason": missing_data_reason,
         "missing_data_impact": missing_data_impact,
-        "usable_for_plan": bool(strategy not in {"no_trade"} and pd.notna(planned_entry)),
+        "usable_for_plan": bool(strategy in {"breakout_buy", "pullback_ma_buy", "volume_confirm_buy"} and pd.notna(planned_entry)),
         "plan_note": note,
     }
 
 
-def run_trade_plan(args) -> tuple[pd.DataFrame, dict]:
-    fine, fine_meta = run_fine(args)
+def run_trade_plan(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
+    if candidates is None:
+        fine, fine_meta = run_fine(args)
+    else:
+        fine = candidates.copy()
+        fine_meta = {"upstream_stage": "fine", "upstream_candidates": len(fine)}
     meta = {
         **fine_meta,
         "plan": "next_session_trade_plan",

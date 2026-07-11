@@ -31,43 +31,48 @@ class DashboardViewModelTest(unittest.TestCase):
                     }
                 ]
             ),
-            "allocation": pd.DataFrame(
+            "plan": pd.DataFrame(
                 [
                     {
                         "code": "000725",
                         "name": "京东方A",
-                        "portfolio_action": "可条件买入",
-                        "budget_status": "预算内",
+                        "action": "等待回踩买入",
                     },
                     {
                         "code": "688981",
                         "name": "中芯国际",
-                        "portfolio_action": "只做风向标",
-                        "budget_status": "一手超过单股仓位上限",
+                        "action": "暂不交易",
                     },
                 ]
             ),
         }
         metas = {
             "sector_screen": {"report_date": "20260331"},
-            "allocation": {"capital": 15000, "core_etf_budget": 9000},
+            "plan": {},
         }
 
         model = build_dashboard_view_model(stages, metas)
 
         self.assertEqual(model["summary"]["stage_counts"]["sector_screen"], 2)
-        self.assertEqual(model["summary"]["stage_counts"]["allocation"], 2)
-        self.assertEqual(model["summary"]["action_counts"]["可条件买入"], 1)
-        self.assertEqual(model["summary"]["action_counts"]["只做风向标"], 1)
+        self.assertEqual(model["summary"]["stage_counts"]["plan"], 2)
+        self.assertEqual(model["summary"]["action_counts"]["等待回踩买入"], 1)
+        self.assertEqual(model["summary"]["action_counts"]["暂不交易"], 1)
+        self.assertNotIn("capital", model["summary"])
         self.assertEqual(model["stages"][0]["key"], "sector_screen")
-        self.assertEqual(model["stages"][0]["title"], "板块筛选")
+        self.assertEqual(model["stages"][0]["title"], "股票池")
+        self.assertEqual(model["stages"][0]["rows"][0]["stock_type"], "科技股")
+        self.assertIn("board_name=光学光电子", model["stages"][0]["rows"][0]["stock_type_note"])
         self.assertEqual(model["stages"][1]["key"], "combo")
         self.assertEqual(model["stages"][1]["title"], "宏观粗筛")
+        self.assertEqual(model["stages"][2]["key"], "fine")
+        self.assertEqual(model["stages"][2]["title"], "技术分析")
+        self.assertEqual(model["stages"][3]["key"], "plan")
+        self.assertEqual(model["stages"][3]["title"], "操作建议")
         self.assertEqual(model["stages"][0]["rows"][0]["code"], "000725")
         self.assertIn("000725", model["traces"])
         self.assertEqual(model["traces"]["000725"][0]["stage"], "sector_screen")
         self.assertEqual(model["traces"]["000725"][1]["stage"], "combo")
-        self.assertEqual(model["traces"]["000725"][2]["stage"], "allocation")
+        self.assertEqual(model["traces"]["000725"][2]["stage"], "plan")
 
 
 if __name__ == "__main__":

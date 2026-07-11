@@ -8,14 +8,13 @@ import pandas as pd
 
 
 STAGE_TITLES = {
-    "sector_screen": "板块筛选",
+    "sector_screen": "股票池",
     "combo": "宏观粗筛",
-    "fine": "技术细筛",
-    "plan": "操作计划",
-    "allocation": "个人配置",
+    "fine": "技术分析",
+    "plan": "操作建议",
 }
 
-STAGE_ORDER = ["sector_screen", "combo", "fine", "plan", "allocation"]
+STAGE_ORDER = ["sector_screen", "combo", "fine", "plan"]
 
 
 def _json_value(value: Any) -> Any:
@@ -55,11 +54,38 @@ def _meta_dict(meta: Any) -> dict:
 
 
 def _trace_label(row: dict) -> str:
-    for key in ["portfolio_action", "action", "technical_score", "coarse_score", "combo_score", "name"]:
+    for key in ["action", "technical_score", "coarse_score", "combo_score", "name"]:
         value = row.get(key)
         if value not in {None, ""}:
             return str(value)
     return "出现"
+
+
+STOCK_TYPE_KEYWORDS = [
+    ("科技股", ["半导体", "通信", "软件", "计算机", "消费电子", "光学光电子", "元件", "电子", "自动化设备", "IT服务"]),
+    ("周期股", ["煤炭", "有色", "钢铁", "化工", "电力", "航运", "石油", "采掘"]),
+    ("金融股", ["银行", "保险", "证券", "多元金融"]),
+    ("消费/防御", ["食品", "饮料", "医药", "家电", "农林牧渔", "公用事业"]),
+]
+
+
+def _classify_stock_type(row: dict) -> tuple[str, str]:
+    board_name = str(row.get("board_name") or "")
+    for stock_type, keywords in STOCK_TYPE_KEYWORDS:
+        if any(keyword in board_name for keyword in keywords):
+            return stock_type, f"股票类型：{stock_type}；识别依据：board_name={board_name}"
+    return "未分类", f"股票类型：未分类；识别依据：board_name={board_name or 'N/A'}"
+
+
+def _annotate_stage_rows(key: str, rows: list[dict]) -> list[dict]:
+    if key != "sector_screen":
+        return rows
+    annotated = []
+    for row in rows:
+        stock_type, note = _classify_stock_type(row)
+        next_row = {**row, "stock_type": stock_type, "stock_type_note": note}
+        annotated.append(next_row)
+    return annotated
 
 
 def build_dashboard_view_model(stages: dict[str, pd.DataFrame], metas: dict[str, dict]) -> dict:
@@ -73,21 +99,24 @@ def build_dashboard_view_model(stages: dict[str, pd.DataFrame], metas: dict[str,
     for key in STAGE_ORDER:
         df = stages.get(key, pd.DataFrame())
         meta = _meta_dict(metas.get(key, {}))
-        rows = _records(df)
+        rows = _annotate_stage_rows(key, _records(df))
         stage_counts[key] = len(rows)
+        columns = list(df.columns) if not df.empty else []
+        if key == "sector_screen" and rows:
+            columns = [*columns, *[col for col in ["stock_type", "stock_type_note"] if col not in columns]]
         stage_models.append(
             {
                 "key": key,
                 "title": STAGE_TITLES.get(key, key),
                 "row_count": len(rows),
                 "meta": meta,
-                "columns": list(df.columns) if not df.empty else [],
+                "columns": columns,
                 "rows": rows,
             }
         )
-        if key == "allocation":
+        if key == "plan":
             for row in rows:
-                action = row.get("portfolio_action")
+                action = row.get("action")
                 if action:
                     action_counts[action] = action_counts.get(action, 0) + 1
         for row in rows:
@@ -104,15 +133,10 @@ def build_dashboard_view_model(stages: dict[str, pd.DataFrame], metas: dict[str,
                 }
             )
 
-    allocation_meta = metas.get("allocation", {})
     return {
         "summary": {
             "stage_counts": stage_counts,
             "action_counts": action_counts,
-            "capital": allocation_meta.get("capital"),
-            "core_etf_budget": allocation_meta.get("core_etf_budget"),
-            "satellite_stock_budget": allocation_meta.get("satellite_stock_budget"),
-            "cash_reserve": allocation_meta.get("cash_reserve"),
         },
         "stages": stage_models,
         "traces": traces,

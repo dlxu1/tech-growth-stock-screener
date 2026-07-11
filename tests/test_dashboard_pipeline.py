@@ -19,26 +19,44 @@ class DashboardPipelineTest(unittest.TestCase):
     def test_runs_all_stages_and_builds_view_model(self) -> None:
         args = Namespace(strategy="tech_growth", coarse_strategy="all", top=5, sector_top=100, coarse_top=5, sector="半导体")
         one_row = pd.DataFrame([{"code": "000725", "name": "京东方A"}])
+        combo_rows = pd.DataFrame(
+            [
+                {"code": f"{i:06d}", "name": f"股票{i}", "combo_score": 100 - i}
+                for i in range(1, 112)
+            ]
+        )
+        combo_top100 = combo_rows.head(100)
+        fine_rows = combo_rows.assign(technical_score=[50 + i for i in range(1, 112)])
+        fine_top100 = fine_rows.head(100)
+        plan_rows = pd.DataFrame([{"code": f"{i:06d}", "name": f"股票{i}", "action": "等待回踩买入"} for i in range(1, 101)])
 
         with (
             patch("dashboard.pipeline.sector_screen.run", return_value=(one_row, {"stage": "sector_screen"})) as sector_run,
-            patch("dashboard.pipeline.run_combo", return_value=(one_row, {"stage": "combo"})) as combo_run,
-            patch("dashboard.pipeline.run_fine", return_value=(one_row, {"stage": "fine"})) as fine_run,
-            patch("dashboard.pipeline.run_trade_plan", return_value=(one_row, {"stage": "plan"})),
-            patch("dashboard.pipeline.run_allocation_plan", return_value=(one_row, {"stage": "allocation", "capital": 15000})),
+            patch("dashboard.pipeline.run_combo", return_value=(combo_top100, {"stage": "combo"})) as combo_run,
+            patch("dashboard.pipeline.run_fine", return_value=(fine_top100, {"stage": "fine"})) as fine_run,
+            patch("dashboard.pipeline.run_trade_plan", return_value=(plan_rows, {"stage": "plan"})) as plan_run,
         ):
             model = run_dashboard(args)
 
         self.assertEqual(sector_run.call_args.args[0].top, 100)
         self.assertEqual(sector_run.call_args.args[0].sector, "半导体")
-        self.assertEqual(combo_run.call_args.args[0].top, 10)
-        self.assertEqual(fine_run.call_args.args[0].top, 5)
+        self.assertEqual(combo_run.call_args.args[0].top, 100)
+        self.assertEqual(fine_run.call_args.args[0].top, 100)
         self.assertIs(combo_run.call_args.kwargs["candidates"], one_row)
-        self.assertIs(fine_run.call_args.kwargs["candidates"], one_row)
+        self.assertIs(fine_run.call_args.kwargs["candidates"], combo_top100)
+        self.assertEqual(len(plan_run.call_args.kwargs["candidates"]), 100)
+        self.assertIn("attention_score", plan_run.call_args.kwargs["candidates"].columns)
         keys = [stage["key"] for stage in model["stages"]]
-        self.assertEqual(keys, ["sector_screen", "combo", "fine", "plan", "allocation"])
-        self.assertEqual(model["summary"]["stage_counts"]["plan"], 1)
-        self.assertIn("000725", model["traces"])
+        self.assertEqual(keys, ["sector_screen", "combo", "fine", "plan"])
+        self.assertEqual(model["stages"][-1]["title"], "操作建议")
+        self.assertEqual(model["summary"]["stage_counts"]["combo"], 100)
+        self.assertEqual(model["summary"]["stage_counts"]["fine"], 100)
+        self.assertEqual(model["summary"]["stage_counts"]["plan"], 100)
+        self.assertIn("health", model["summary"])
+        self.assertIn("health_score", model["summary"]["health"])
+        self.assertEqual(model["stages"][-1]["rows"][0]["action"], "等待回踩买入")
+        self.assertNotIn("budget_status", model["stages"][-1]["rows"][0])
+        self.assertIn("000001", model["traces"])
 
 
 if __name__ == "__main__":

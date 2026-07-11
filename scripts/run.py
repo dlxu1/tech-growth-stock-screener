@@ -25,6 +25,7 @@ from reports.allocation_markdown import render_allocation_plan
 from reports.dashboard_html import render_dashboard_html
 from reports.sector_screen_markdown import render_sector_screen
 from reports.trade_plan_markdown import render_trade_plan
+from dashboard.health import audit_dashboard_model, render_health_markdown
 from infra.cache import read_index_constituents
 from strategies.coarse.registry import STRATEGIES as COARSE_STRATEGIES
 from strategies.coarse.registry import run as run_coarse
@@ -36,6 +37,15 @@ from dashboard.pipeline import run_dashboard
 from allocation.personal_plan import run_allocation_plan
 from plan.trade_plan import run_trade_plan
 from infra.preflight import POLICIES, apply_update_policy
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_PYTHON = PROJECT_ROOT / ".venv" / "bin" / "python"
+
+
+def _command_example(*args: str) -> str:
+    script = Path(__file__).resolve()
+    return " ".join([str(PROJECT_PYTHON), str(script), *args])
 
 
 def add_common_screen_args(parser: argparse.ArgumentParser) -> None:
@@ -66,7 +76,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sync = sub.add_parser("sync", help="Sync source data into the SQLite cache.")
+    sync = sub.add_parser(
+        "sync",
+        help="Sync source data into the SQLite cache.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            f"  {_command_example('sync', '--dataset', 'daily_prices', '--codes', '001309,688525,688498,301666,688766,300475,300857,688110', '--start', '2026-01-01', '--end', '2026-07-10', '--adjust', 'qfq', '--source', 'auto', '--no-proxy')}"
+        ),
+    )
     sync.add_argument("--dataset", choices=["spot", "financials", "industry_boards", "index_constituents", "daily_prices"], default="spot")
     sync.add_argument("--report-date", default="auto")
     sync.add_argument("--refresh", action="store_true")
@@ -160,7 +178,15 @@ def parse_args() -> argparse.Namespace:
     add_common_screen_args(allocation)
     allocation.set_defaults(top=5)
 
-    dashboard = sub.add_parser("dashboard", help="Generate one interactive HTML report for all pipeline stages.")
+    dashboard = sub.add_parser(
+        "dashboard",
+        help="Generate one interactive HTML report for all pipeline stages.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            f"  {_command_example('dashboard', '--source', 'cache', '--output', str(Path(__file__).resolve().parents[1] / '.cache' / 'reports' / 'dashboard_latest.html'))}"
+        ),
+    )
     dashboard.add_argument("--strategy", choices=["tech_growth"], default="tech_growth")
     dashboard.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
     dashboard.add_argument("--coarse-top", type=int, default=5)
@@ -175,19 +201,42 @@ def parse_args() -> argparse.Namespace:
     dashboard.add_argument("--trailing-profit", type=float, default=0.08, help="Profit threshold for enabling trailing stop.")
     dashboard.add_argument("--trailing-drawdown", type=float, default=0.06, help="Drawdown from highest close for trailing stop.")
     dashboard.add_argument("--max-position", type=float, default=0.25, help="Maximum plan-layer single-stock position cap.")
-    dashboard.add_argument("--capital", type=float, default=15000.0, help="Personal account capital in CNY.")
-    dashboard.add_argument("--target-return", type=float, default=0.10, help="Annual target return used for planning context.")
-    dashboard.add_argument("--core-etf-pct", type=float, default=0.60, help="Capital share reserved for technology ETF core position.")
-    dashboard.add_argument("--satellite-stock-pct", type=float, default=0.20, help="Capital share reserved for individual technology stocks.")
-    dashboard.add_argument("--cash-pct", type=float, default=0.20, help="Capital share kept as cash reserve.")
-    dashboard.add_argument("--etf-tranches", type=int, default=3, help="Number of ETF buying tranches.")
-    dashboard.add_argument("--initial-single-stock-pct", type=float, default=0.12, help="First-buy budget cap for one stock.")
-    dashboard.add_argument("--max-single-stock-pct", type=float, default=0.20, help="Maximum personal-account cap for one stock.")
     dashboard.add_argument("--sector-top", type=int, default=100, help="Maximum rows retained in the dashboard sector-screen stage.")
+    dashboard.add_argument("--combo-top", type=int, default=100, help="Maximum rows retained in the dashboard macro coarse stage.")
     dashboard.add_argument("--format", choices=["html"], default="html")
     dashboard.add_argument("--output", help="HTML output path. Defaults to .cache/reports/dashboard_latest.html.")
     add_common_screen_args(dashboard)
     dashboard.set_defaults(top=5)
+
+    validate_dashboard = sub.add_parser(
+        "validate-dashboard",
+        help="Run data-health checks for the dashboard pipeline.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            f"  {_command_example('validate-dashboard', '--source', 'cache', '--expected-latest-trade-date', '2026-07-10')}"
+        ),
+    )
+    validate_dashboard.add_argument("--strategy", choices=["tech_growth"], default="tech_growth")
+    validate_dashboard.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
+    validate_dashboard.add_argument("--coarse-top", type=int, default=5)
+    validate_dashboard.add_argument("--combo-strategy-top", type=int, default=20, help="Candidates retained from each combo component strategy before aggregation.")
+    validate_dashboard.add_argument("--min-amount", type=float, default=20000000.0, help="Minimum 20-day average turnover for liquidity scoring.")
+    validate_dashboard.add_argument("--breakout-buffer", type=float, default=0.003, help="Breakout trigger buffer above recent high.")
+    validate_dashboard.add_argument("--volume-multiplier", type=float, default=1.2, help="Turnover multiple required for volume confirmation.")
+    validate_dashboard.add_argument("--stop-pct", type=float, default=0.05, help="Fixed stop percentage below planned entry.")
+    validate_dashboard.add_argument("--atr-stop-multiplier", type=float, default=1.5, help="ATR multiple for stop placement.")
+    validate_dashboard.add_argument("--max-gap-up", type=float, default=0.05, help="Cancel chasing if next open gaps above latest close by this amount.")
+    validate_dashboard.add_argument("--move-stop-profit", type=float, default=0.05, help="Profit threshold for moving stop to cost.")
+    validate_dashboard.add_argument("--trailing-profit", type=float, default=0.08, help="Profit threshold for enabling trailing stop.")
+    validate_dashboard.add_argument("--trailing-drawdown", type=float, default=0.06, help="Drawdown from highest close for trailing stop.")
+    validate_dashboard.add_argument("--max-position", type=float, default=0.25, help="Maximum plan-layer single-stock position cap.")
+    validate_dashboard.add_argument("--sector-top", type=int, default=100, help="Maximum rows retained in the dashboard sector-screen stage.")
+    validate_dashboard.add_argument("--combo-top", type=int, default=100, help="Maximum rows retained in the dashboard macro coarse stage.")
+    validate_dashboard.add_argument("--expected-latest-trade-date", help="Expected latest trade date, e.g. 2026-07-10.")
+    validate_dashboard.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    add_common_screen_args(validate_dashboard)
+    validate_dashboard.set_defaults(top=5)
 
     visualize = sub.add_parser("visualize", help="Generate local visual reports from the SQLite cache.")
     visualize.add_argument("--dataset", choices=["index_constituents", "coarse", "combo", "fine"], default="index_constituents")
@@ -314,6 +363,14 @@ def main() -> int:
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(render_dashboard_html(model), encoding="utf-8")
             print(json.dumps({"output": str(output.resolve()), "stages": len(model.get("stages", []))}, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "validate-dashboard":
+            model = run_dashboard(args)
+            audit = audit_dashboard_model(model, expected_latest_trade_date=getattr(args, "expected_latest_trade_date", None))
+            if args.format == "json":
+                print(json.dumps(audit, ensure_ascii=False, indent=2))
+            else:
+                print(render_health_markdown(audit))
             return 0
         if args.command == "visualize":
             if args.dataset == "index_constituents":

@@ -1,15 +1,15 @@
 # Tech Growth Stock Screener
 
-一个面向 A 股科技股的分层选股与交易计划研究工具。项目会从公开数据源获取股票、行业、财报和日线行情，缓存到 SQLite，再通过粗筛、细筛和计划层输出候选股票、技术评分和下一交易日规则化操作计划。
+一个面向 A 股科技股的分层选股与交易计划研究工具。项目会从公开数据源获取股票、行业、财报和日线行情，缓存到 SQLite，再通过股票池、宏观粗筛、技术分析和计划层输出候选股票、技术评分和下一交易日规则化操作计划。
 
 本项目用于研究和辅助决策，不构成投资建议，也不保证收益。
 
 ## 功能概览
 
-- 科技股候选池构建：按科技行业/板块关键词筛选 A 股科技方向股票。
+- 股票池构建：按基础 universe 和行业/板块关键词筛选 A 股股票，并按 `board_name` 标注科技股、周期股等股票类型。
 - 粗筛策略：基于市值、估值、成长、盈利、研发、成交额、价格强度、回撤等指标，每个策略默认保留 5 支股票。
 - 组合评分：聚合成长、质量、风控、流动性和市场确认策略，输出潜力股研究清单。
-- 细筛策略：读取日线行情，计算 MA、MACD、RSI、成交额放大、突破、回撤、ATR 等技术指标，并输出技术评分。
+- 技术分析：读取日线行情，计算 MA、MACD、RSI、成交额放大、突破、回撤、ATR 等技术指标，并输出技术评分。
 - 计划层：根据细筛结果生成下一交易日规则计划，包括突破价、回踩区间、放量阈值、计划入场价、初始止损、止盈、移动止损和仓位上限。
 - 个人配置计划：在计划层基础上叠加账户资金约束，输出 ETF 核心仓、个股卫星仓、现金预留和一手成本检查。
 - SQLite 缓存：远程数据和日线行情会缓存到本地数据库，支持离线复用。
@@ -77,12 +77,12 @@ references/              # 架构、schema、策略和计划规则文档
 ### 1. 创建环境
 
 ```bash
-python -m venv venv
-source venv/bin/activate
-pip install pandas requests akshare efinance baostock
+cd /Users/xudoulei/work/tech-growth-stock-screener
+python3 -m venv .venv
+.venv/bin/python -m pip install pandas requests akshare efinance baostock rich openpyxl lxml html5lib beautifulsoup4 tabulate numpy
 ```
 
-如需更完整运行环境，可根据实际报错补充安装 `numpy`、`rich` 等依赖。
+当前项目推荐使用 `/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python` 运行命令。
 
 ### 2. 同步基础数据
 
@@ -210,11 +210,11 @@ python scripts/run.py allocation --capital 15000 --source cache
 
 ### 11. 生成交互式流程仪表盘
 
-把一次运行中的板块筛选、组合评分、技术细筛、操作计划和个人配置汇总到一个可交互 HTML：
+把一次运行中的股票池、宏观粗筛、技术分析和操作建议汇总到一个可交互 HTML。宏观粗筛最多保留 100 只，技术分析覆盖这些宏观粗筛股票，操作建议对技术分析结果中的所有股票生成下一交易日规则计划；矩阵中用点大小体现综合关注分，不额外给前 5 只加黑圈高亮，不合并个人预算或资金配置约束：
 
 ```bash
-python scripts/run.py dashboard --capital 15000 --source cache
-python scripts/run.py dashboard --universe csi300 --sector 半导体 --capital 15000 --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --universe csi300 --sector 半导体 --source cache
 ```
 
 默认输出：
@@ -226,18 +226,33 @@ python scripts/run.py dashboard --universe csi300 --sector 半导体 --capital 1
 也可以指定路径：
 
 ```bash
-python scripts/run.py dashboard --capital 15000 --source cache --output .cache/reports/dashboard_latest.html
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
 ```
+
+### 12. 验证仪表盘数据健康
+
+在解读候选股前，先检查本次缓存数据是否足够可信：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache --expected-latest-trade-date 2026-07-10
+```
+
+输出会包含数据健康度、最新行情日、股票池行情指标缺失数、操作建议缺日线数、可执行计划数和阶段串行关系。仪表盘 HTML 顶部也会展示同一套健康摘要。
 
 仪表盘支持：
 
-- 顶部总览资金、阶段行数和最终动作分布。
+- 阶段行数和最终动作分布。
+- 顶部数据健康条，快速提示行情新鲜度、缺失覆盖和阶段串行关系。
+- `宏观潜力 × 技术时机` 矩阵作为首页主视图，用宏观粗筛分判断潜力，用技术细筛分判断时机。
+- 点击矩阵中的股票点，会在右侧股票介绍区域展示单股的潜力/时机解释；矩阵同时展示宏观粗筛和技术分析股票，综合关注分越高点越大。矩阵分割线与颜色规则一致：宏观潜力 80 以上为高潜力，技术时机 75 以上为好时机。
+- 股票池表格展示股票类型，鼠标悬停可查看识别依据。
 - 标签页查看各阶段结果。
 - 全局搜索股票代码、名称、行业和动作。
 - 表头点击排序。
 - 点击股票行查看该股票在各阶段的轨迹。
 
-### 12. 生成本地可视化报表
+### 13. 生成本地可视化报表
 
 ```bash
 python scripts/run.py visualize --dataset index_constituents --index-symbol 000300

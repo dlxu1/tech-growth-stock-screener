@@ -62,8 +62,11 @@ Strategy labels:
 - `breakout_buy`: buy only after price breaks latest high or recent high with a configurable buffer.
 - `pullback_ma_buy`: buy only if price pulls back into the MA5/MA10/MA20 support zone and stabilizes.
 - `volume_confirm_buy`: buy only if price action is positive and turnover reaches the confirmation threshold.
-- `watch`: keep on watchlist but do not open by default.
-- `no_trade`: no trade because score or data quality is insufficient.
+- `watch`: keep on watchlist; with cached quotes, compute observation reference
+  prices but do not open by default.
+- `no_trade`: no trade because score or data quality is insufficient; with
+  cached quotes, compute observation reference prices so the dashboard can show
+  a complete watch plan.
 - `no_data`: no trade because cached daily quotes are missing.
 
 ## Entry Metrics
@@ -82,7 +85,10 @@ Planned-entry rules:
 - `breakout_buy`: `planned_entry = breakout_trigger`.
 - `pullback_ma_buy`: `planned_entry = midpoint(pullback_low, pullback_high)`.
 - `volume_confirm_buy`: `planned_entry = latest_close * (1 + breakout_buffer)`.
-- `watch`, `no_trade`, `no_data`: no planned entry.
+- `watch`, `no_trade`: `planned_entry = breakout_trigger` as an observation
+  reference only; this is not a buy instruction and `usable_for_plan` remains
+  false unless the primary strategy is a buy-confirmation strategy.
+- `no_data`: no planned entry.
 
 ## Stop-Loss Metrics
 
