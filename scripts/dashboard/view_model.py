@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from dashboard.stock_types import StockTypeRules, classify_stock_type
+
 
 STAGE_TITLES = {
     "sector_screen": "股票池",
@@ -61,34 +63,33 @@ def _trace_label(row: dict) -> str:
     return "出现"
 
 
-STOCK_TYPE_KEYWORDS = [
-    ("科技股", ["半导体", "通信", "软件", "计算机", "消费电子", "光学光电子", "元件", "电子", "自动化设备", "IT服务"]),
-    ("周期股", ["煤炭", "有色", "钢铁", "化工", "电力", "航运", "石油", "采掘"]),
-    ("金融股", ["银行", "保险", "证券", "多元金融"]),
-    ("消费/防御", ["食品", "饮料", "医药", "家电", "农林牧渔", "公用事业"]),
-]
-
-
-def _classify_stock_type(row: dict) -> tuple[str, str]:
-    board_name = str(row.get("board_name") or "")
-    for stock_type, keywords in STOCK_TYPE_KEYWORDS:
-        if any(keyword in board_name for keyword in keywords):
-            return stock_type, f"股票类型：{stock_type}；识别依据：board_name={board_name}"
-    return "未分类", f"股票类型：未分类；识别依据：board_name={board_name or 'N/A'}"
-
-
-def _annotate_stage_rows(key: str, rows: list[dict]) -> list[dict]:
+def _annotate_stage_rows(key: str, rows: list[dict], stock_type_rules: StockTypeRules | None = None) -> list[dict]:
     if key != "sector_screen":
         return rows
     annotated = []
     for row in rows:
-        stock_type, note = _classify_stock_type(row)
+        if row.get("stock_type") and row.get("stock_type_note"):
+            annotated.append(row)
+            continue
+        stock_type, note = classify_stock_type(row, stock_type_rules)
         next_row = {**row, "stock_type": stock_type, "stock_type_note": note}
         annotated.append(next_row)
     return annotated
 
 
-def build_dashboard_view_model(stages: dict[str, pd.DataFrame], metas: dict[str, dict]) -> dict:
+def _stock_type_counts(rows: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        stock_type = str(row.get("stock_type") or "未分类")
+        counts[stock_type] = counts.get(stock_type, 0) + 1
+    return counts
+
+
+def build_dashboard_view_model(
+    stages: dict[str, pd.DataFrame],
+    metas: dict[str, dict],
+    stock_type_rules: StockTypeRules | None = None,
+) -> dict:
     """Normalize stage outputs into one dashboard model."""
 
     stage_models = []
@@ -99,7 +100,7 @@ def build_dashboard_view_model(stages: dict[str, pd.DataFrame], metas: dict[str,
     for key in STAGE_ORDER:
         df = stages.get(key, pd.DataFrame())
         meta = _meta_dict(metas.get(key, {}))
-        rows = _annotate_stage_rows(key, _records(df))
+        rows = _annotate_stage_rows(key, _records(df), stock_type_rules)
         stage_counts[key] = len(rows)
         columns = list(df.columns) if not df.empty else []
         if key == "sector_screen" and rows:
@@ -133,10 +134,12 @@ def build_dashboard_view_model(stages: dict[str, pd.DataFrame], metas: dict[str,
                 }
             )
 
+    sector_rows = next((stage["rows"] for stage in stage_models if stage["key"] == "sector_screen"), [])
     return {
         "summary": {
             "stage_counts": stage_counts,
             "action_counts": action_counts,
+            "stock_type_counts": _stock_type_counts(sector_rows),
         },
         "stages": stage_models,
         "traces": traces,

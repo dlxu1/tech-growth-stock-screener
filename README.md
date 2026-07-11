@@ -1,80 +1,97 @@
 # Tech Growth Stock Screener
 
-一个面向 A 股科技股的分层选股与交易计划研究工具。项目会从公开数据源获取股票、行业、财报和日线行情，缓存到 SQLite，再通过股票池、宏观粗筛、技术分析和计划层输出候选股票、技术评分和下一交易日规则化操作计划。
+一个面向 A 股科技股的分层筛选与操作计划研究工具。项目会从公开第三方数据源获取股票、行业、财报和日线行情，缓存到 SQLite，再按串行流程输出候选股票、宏观评分、技术时机和下一交易日规则化操作建议。
 
-本项目用于研究和辅助决策，不构成投资建议，也不保证收益。
+本项目只用于公开数据研究、策略实验和辅助决策，不构成投资建议，也不保证收益。
+
+## 当前主流程
+
+```text
+股票池 -> 宏观粗筛 -> 技术分析 -> 操作建议
+```
+
+关键约束：每个下游阶段只使用上一个阶段选出的股票，不从全市场重新取数。
+
+当前 dashboard 默认数据规模：
+
+- `股票池`：最多 100 只，按基础股票池和行业/板块条件形成研究 universe。
+- `宏观粗筛`：最多 100 只，从股票池中按基本面、成长、质量、风控、流动性和动量综合排序。
+- `技术分析`：覆盖全部宏观粗筛股票，计算趋势、动量、量能、突破、风险和流动性指标。
+- `操作建议`：覆盖全部技术分析股票，生成下一交易日规则化计划；不包含个人预算、仓位预算或资金配置字段。
 
 ## 功能概览
 
-- 股票池构建：按基础 universe 和行业/板块关键词筛选 A 股股票，并按 `board_name` 标注科技股、周期股等股票类型。
-- 粗筛策略：基于市值、估值、成长、盈利、研发、成交额、价格强度、回撤等指标，每个策略默认保留 5 支股票。
-- 组合评分：聚合成长、质量、风控、流动性和市场确认策略，输出潜力股研究清单。
-- 技术分析：读取日线行情，计算 MA、MACD、RSI、成交额放大、突破、回撤、ATR 等技术指标，并输出技术评分。
-- 计划层：根据细筛结果生成下一交易日规则计划，包括突破价、回踩区间、放量阈值、计划入场价、初始止损、止盈、移动止损和仓位上限。
-- 个人配置计划：在计划层基础上叠加账户资金约束，输出 ETF 核心仓、个股卫星仓、现金预留和一手成本检查。
-- SQLite 缓存：远程数据和日线行情会缓存到本地数据库，支持离线复用。
-- 按需更新：筛选、细筛、计划和可视化命令可用 `--update-policy` 在运行前自动检查并增量更新必要数据。
-- 多格式输出：支持 Markdown、JSON、CSV。
-- 本地可视化：支持从 SQLite 生成指数成分股 HTML 报表。
-- 数据质量诊断：输出缺失数据原因以及对评分和操作计划的影响。
+- 股票池构建：支持 `tech` 科技关键词池和 `csi300` 沪深 300 缓存成分池，并可用 `--sector` 按行业/板块关键词过滤。
+- 股票类型标注：股票池按 `configs/stock_type_rules.json` 配置规则识别科技股、周期股、金融股、消费/防御或自定义类型，dashboard hover 可查看命中关键词和识别依据。
+- 股票类型过滤：`--stock-types` 可指定哪些类型进入宏观粗筛，股票池仍保留完整分类结果用于追溯。
+- 宏观粗筛：聚合多策略共振、成长、质量、风控、流动性和动量，输出 `宏观粗筛分`。
+- 技术分析：基于日线行情计算 MA、MACD、RSI、成交额放大、突破、回撤、ATR 等技术指标，输出 `技术分`。
+- 操作建议：按规则生成 `观察`、`条件买入`、`等待回踩`、`等待放量确认`、`暂不交易` 等下一交易日计划字段。
+- 潜力-时机矩阵：以宏观潜力为 x 轴、技术时机为 y 轴，点大小代表综合关注分，点击点位更新右侧股票介绍。
+- 矩阵内检索：dashboard 支持按股票代码、名称、行业/板块、动作和原因快速检索当前矩阵内股票。
+- 数据健康审计：`validate-dashboard` 和 dashboard 顶部健康条会提示行情新鲜度、缺失覆盖、可执行计划数和阶段串行关系。
+- SQLite 缓存：远程数据与日线行情默认缓存到项目本地 `.cache/stock_data.sqlite`，支持离线复用。
+- 多格式输出：主要 CLI 支持 Markdown、JSON、CSV；dashboard 输出静态 HTML。
 
 ## 架构图
 
 ```mermaid
 flowchart TD
   CLI["scripts/run.py CLI"] --> Sync["sync 数据同步"]
-  CLI --> Coarse["coarse 粗筛"]
-  CLI --> Fine["fine 细筛"]
-  CLI --> Plan["plan 计划"]
-  CLI --> Allocation["allocation 个人配置"]
-  CLI --> Screen["screen 严格筛选"]
+  CLI --> Sector["sector-screen 股票池"]
+  CLI --> Combo["combo 宏观粗筛"]
+  CLI --> Fine["fine 技术分析"]
+  CLI --> Plan["plan 操作建议"]
+  CLI --> Dashboard["dashboard 交互 HTML"]
+  CLI --> Validate["validate-dashboard 数据健康审计"]
+  CLI --> Allocation["allocation 可选个人配置"]
 
-  Sync --> Sources["data/sources.py 源适配"]
+  Sync --> Sources["data/sources.py 数据源适配"]
   Sources --> Cache["infra/cache.py + SQLite"]
-  Cache --> DB[("stock_data.sqlite")]
+  Cache --> DB[(".cache/stock_data.sqlite")]
 
-  Coarse --> CoarseLayer["strategies/coarse"]
-  Fine --> FineLayer["strategies/fine"]
-  Plan --> PlanLayer["plan/trade_plan.py"]
-  Allocation --> AllocationLayer["allocation/personal_plan.py"]
-
-  CoarseLayer --> DB
-  FineLayer --> DB
-  PlanLayer --> DB
-  AllocationLayer --> PlanLayer
-
-  CoarseLayer --> Reports["reports Markdown/JSON/CSV"]
-  FineLayer --> Reports
-  PlanLayer --> Reports
-  AllocationLayer --> Reports
-  Screen --> Reports
+  Sector --> DB
+  Combo --> DB
+  Fine --> DB
+  Plan --> DB
+  Dashboard --> Sector
+  Dashboard --> Combo
+  Dashboard --> Fine
+  Dashboard --> Plan
+  Validate --> Dashboard
+  Allocation --> Plan
 ```
 
-## 分层说明
+## 目录结构
 
 ```text
 scripts/
   run.py                 # 统一 CLI 入口
-  common.py              # 通用配置、代理、字段处理
+  common.py              # 通用配置、代理、字段处理、缓存路径
   infra/                 # 基建层：缓存、网络策略、预更新、日志
-  data/                  # 兼容源适配层：AKShare/Sina/efinance/Eastmoney/CSV
+  data/                  # 数据源适配层：AKShare/Sina/efinance/Eastmoney/CSV
+  dashboard/             # dashboard 串行流程、view model、健康审计
   strategies/
     tech_growth.py       # 原始严格筛选策略
-    coarse/              # 粗筛层：候选池 + 多策略评分
-    fine/                # 细筛层：技术指标评分
+    sector_screen.py     # 股票池筛选
+    coarse/              # 宏观粗筛与组合评分
+    fine/                # 技术指标评分
   plan/
-    trade_plan.py        # 下一交易日计划逻辑
+    trade_plan.py        # 下一交易日规则计划
     repository.py        # 计划层缓存读取
     network.py           # 计划层数据刷新 hook
   allocation/
-    personal_plan.py     # 小资金账户的 ETF 核心仓 + 个股卫星仓配置
-  reports/               # 展示层
+    personal_plan.py     # 可选个人资金配置，不进入 dashboard 主流程
+  reports/               # Markdown/JSON/CSV/HTML 展示层
+configs/                 # dashboard 股票类型规则配置
+docs/                    # 当前项目上下文、数据规则、决策和交接文档
 references/              # 架构、schema、策略和计划规则文档
+tests/                   # 单元测试
 ```
 
 ## 快速开始
 
-### 1. 创建环境
+### 1. 创建项目本地环境
 
 ```bash
 cd /Users/xudoulei/work/tech-growth-stock-screener
@@ -82,39 +99,138 @@ python3 -m venv .venv
 .venv/bin/python -m pip install pandas requests akshare efinance baostock rich openpyxl lxml html5lib beautifulsoup4 tabulate numpy
 ```
 
-当前项目推荐使用 `/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python` 运行命令。
+后续命令推荐使用项目本地解释器：
+
+```text
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python
+```
 
 ### 2. 同步基础数据
 
 ```bash
-python scripts/run.py sync --dataset spot
-python scripts/run.py sync --dataset financials --report-date 20260331
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sync --dataset spot
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sync --dataset financials --report-date 20260331
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sync --dataset index_constituents --index-symbol 000300
 ```
 
-同步日线行情：
+同步指定股票日线行情：
 
 ```bash
-python scripts/run.py sync --dataset daily_prices --codes 600584,000021 --start 2024-01-01 --end 2026-07-08
-python scripts/run.py sync --dataset daily_prices --from-index --index-symbol 000300 --start 2026-01-09 --end 2026-07-09 --adjust qfq --source auto --no-proxy
-python scripts/run.py sync --dataset daily_prices --from-index --index-symbol 000300 --start 2026-01-09 --end 2026-07-09 --adjust qfq --source auto --no-proxy --skip-existing
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sync --dataset daily_prices --codes 600584,000021 --start 2024-01-01 --end 2026-07-10 --adjust qfq --source auto --no-proxy
 ```
 
-同步沪深 300 成分股：
+按指数成分同步日线行情：
 
 ```bash
-python scripts/run.py sync --dataset index_constituents --index-symbol 000300
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sync --dataset daily_prices --from-index --index-symbol 000300 --start 2026-01-01 --end 2026-07-10 --adjust qfq --source auto --no-proxy --skip-existing
 ```
 
-### 3. 按需更新后运行
+### 3. 生成交互式 dashboard
 
-旧行为默认保持不变：不加 `--update-policy` 时，命令仍按已有缓存和 `--source` 行为运行。
-
-日常研究推荐：
+生成当前主视图：
 
 ```bash
-python scripts/run.py combo --universe csi300 --top 20 --combo-strategy-top 20 --update-policy auto --format markdown
-python scripts/run.py fine --universe csi300 --coarse-strategy all --coarse-top 5 --top 20 --update-policy auto --format markdown
-python scripts/run.py plan --universe csi300 --coarse-strategy all --coarse-top 5 --top 5 --update-policy auto --format markdown
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
+```
+
+按行业/板块过滤：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --universe tech --sector 半导体 --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
+```
+
+使用沪深 300 作为基础池：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --universe csi300 --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
+```
+
+只让指定股票类型进入宏观粗筛：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --stock-types 科技股,周期股 --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
+```
+
+使用自定义股票类型规则：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --stock-type-config /Users/xudoulei/work/tech-growth-stock-screener/configs/stock_type_rules.json
+```
+
+默认输出：
+
+```text
+.cache/reports/dashboard_latest.html
+```
+
+dashboard 支持：
+
+- 顶部数据健康条，展示数据健康度、最新行情日、缺失覆盖和阶段串行关系。
+- `宏观潜力 × 技术时机` 矩阵作为首页主视图。
+- 矩阵点大小表示综合关注分：宏观潜力 * 65% + 技术时机 * 35%。
+- 矩阵不再给前 5 名额外加黑圈，高优先级由点大小和右侧详情表达。
+- 矩阵分割线与颜色阈值一致：宏观潜力 `>= 80` 为高潜力，技术时机 `>= 75` 为好时机。
+- 矩阵搜索框可按代码、名称、板块、动作、原因和策略快速过滤股票。
+- 矩阵股票类型 chips 可按当前矩阵内的股票类型快速过滤展示。
+- 点击矩阵股票点后，右侧股票介绍会更新为该股票的宏观潜力、技术时机和操作建议说明。
+- 完整阶段表格保留在页面下方，默认折叠/弱化展示，便于追溯明细。
+
+### 4. 验证 dashboard 数据健康
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache --expected-latest-trade-date 2026-07-10
+```
+
+输出会检查：
+
+- 股票池、宏观粗筛、技术分析、操作建议的阶段行数。
+- 下游股票是否都来自上游阶段。
+- 股票池行情指标是否缺失。
+- 操作建议是否缺少日线行情。
+- 可执行计划数量。
+- 最新行情日是否符合预期。
+- 已知 0-100 分数字段是否越界。
+
+### 5. 单独运行各阶段
+
+股票池：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sector-screen --universe tech --sector 半导体 --top 100 --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sector-screen --universe csi300 --sector 通信设备 --top 100 --source cache
+```
+
+宏观粗筛：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py combo --top 100 --combo-strategy-top 20 --source cache --format markdown
+```
+
+技术分析：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py fine --coarse-strategy all --coarse-top 100 --top 100 --source cache --format markdown
+```
+
+操作建议：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py plan --coarse-strategy all --coarse-top 100 --top 100 --source cache --format markdown
+```
+
+严格科技成长筛选：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py screen --top 30 --source cache --format markdown
+```
+
+### 6. 按需更新策略
+
+不加 `--update-policy` 时，命令保持当前缓存/数据源行为。需要运行前自动补数据时可使用：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --universe csi300 --update-policy auto --update-start 2026-01-01 --update-end 2026-07-10
 ```
 
 `--update-policy` 可选：
@@ -125,153 +241,53 @@ python scripts/run.py plan --universe csi300 --coarse-strategy all --coarse-top 
 - `strict`：和 `auto` 类似，但必要数据更新失败会中止命令。
 - `refresh`：强制刷新当前命令依赖的数据。
 
-可用 `--update-start`、`--update-end` 控制日线更新区间；不指定时默认更新最近 180 天，`--update-end` 默认为当天。
+常用更新参数：
 
-### 4. 运行粗筛
+- `--update-start`：日线预更新开始日期。
+- `--update-end`：日线预更新结束日期，默认当天。
+- `--update-daily-window-days`：未指定日期时的默认回看天数，默认 180 天。
+- `--update-adjust`：日线复权模式，可选空值、`qfq`、`hfq`。
 
-```bash
-python scripts/run.py coarse --strategy all --top 5 --format markdown
-python scripts/run.py coarse --strategy all --top 5 --universe csi300 --source cache --format markdown
-```
+### 7. 离线运行
 
-### 5. 运行细筛
-
-```bash
-python scripts/run.py fine --coarse-strategy all --coarse-top 5 --top 10 --format markdown
-```
-
-### 6. 运行潜力股组合评分
+已有缓存时，优先用 `--source cache` 或 `--update-policy cache`：
 
 ```bash
-python scripts/run.py combo --top 20 --combo-strategy-top 20 --format markdown
-python scripts/run.py combo --top 20 --combo-strategy-top 20 --universe csi300 --source cache --format markdown
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py plan --coarse-strategy all --coarse-top 100 --top 100 --source cache
 ```
 
-### 7. 生成下一交易日计划
+### 8. 可选个人配置计划
+
+`allocation` 仍保留为独立 CLI 工具，用于把规则计划叠加到账户资金约束；它不是当前 dashboard 主流程的一部分。
 
 ```bash
-python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --format markdown
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py allocation --capital 15000 --source cache --format markdown
 ```
 
-### 8. 运行板块筛选
-
-从指定基础股票池里按板块字段过滤，并最多保留 100 只股票：
-
-```bash
-python scripts/run.py sector-screen --universe csi300 --sector 半导体 --top 100 --source cache
-python scripts/run.py sector-screen --universe tech --sector 通信设备 --top 100 --source cache
-```
-
-说明：
-
-- `--universe csi300` 使用缓存的沪深 300 成分股。
-- `--universe tech` 使用科技行业关键词池。
-- `--sector` 当前按 `board_name` / 财报行业字段做包含匹配。
-- “半导体”这类行业字段可以过滤；“光模块、先进封装”这类细分概念需要后续接入概念板块成分数据才可精确过滤。
-
-### 9. 生成个人科技股配置计划
-
-适合把 15000 元这类小资金账户落成“科技 ETF 核心仓 + 个股卫星仓 + 现金预留”的规则计划：
-
-```bash
-python scripts/run.py allocation --capital 15000 --source cache --format markdown
-```
-
-默认规则：
+默认配置逻辑：
 
 - 60% 科技 ETF 核心仓，分 3 笔买入。
 - 20% 个股卫星仓。
 - 20% 现金预留。
 - 单只个股首次买入上限 12%，单只个股最大上限 20%。
-- 对 A 股个股按 100 股一手估算成本；一手成本超过仓位上限的标的只作为风向标。
+- 对 A 股个股按 100 股一手估算成本；一手成本超过仓位上限的标的只作为观察对象。
 
-可调整参数：
-
-```bash
-python scripts/run.py allocation \
-  --capital 15000 \
-  --core-etf-pct 0.60 \
-  --satellite-stock-pct 0.20 \
-  --cash-pct 0.20 \
-  --target-return 0.10 \
-  --format markdown
-```
-
-### 10. 离线运行
-
-如果已有缓存，可使用：
+### 9. 生成本地可视化报表
 
 ```bash
-python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --source cache
-python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --update-policy cache
-python scripts/run.py sector-screen --universe csi300 --sector 半导体 --top 100 --source cache
-python scripts/run.py allocation --capital 15000 --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py visualize --dataset index_constituents --index-symbol 000300
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py visualize --dataset combo --top 100 --combo-strategy-top 20 --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/combo.html
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py visualize --dataset fine --coarse-strategy all --coarse-top 100 --top 100 --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/fine.html
 ```
 
-### 11. 生成交互式流程仪表盘
-
-把一次运行中的股票池、宏观粗筛、技术分析和操作建议汇总到一个可交互 HTML。宏观粗筛最多保留 100 只，技术分析覆盖这些宏观粗筛股票，操作建议对技术分析结果中的所有股票生成下一交易日规则计划；矩阵中用点大小体现综合关注分，不额外给前 5 只加黑圈高亮，不合并个人预算或资金配置约束：
-
-```bash
-/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache
-/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --universe csi300 --sector 半导体 --source cache
-```
-
-默认输出：
-
-```text
-.cache/reports/dashboard_latest.html
-```
-
-也可以指定路径：
-
-```bash
-/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
-```
-
-### 12. 验证仪表盘数据健康
-
-在解读候选股前，先检查本次缓存数据是否足够可信：
-
-```bash
-/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache
-/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache --expected-latest-trade-date 2026-07-10
-```
-
-输出会包含数据健康度、最新行情日、股票池行情指标缺失数、操作建议缺日线数、可执行计划数和阶段串行关系。仪表盘 HTML 顶部也会展示同一套健康摘要。
-
-仪表盘支持：
-
-- 阶段行数和最终动作分布。
-- 顶部数据健康条，快速提示行情新鲜度、缺失覆盖和阶段串行关系。
-- `宏观潜力 × 技术时机` 矩阵作为首页主视图，用宏观粗筛分判断潜力，用技术细筛分判断时机。
-- 点击矩阵中的股票点，会在右侧股票介绍区域展示单股的潜力/时机解释；矩阵同时展示宏观粗筛和技术分析股票，综合关注分越高点越大。矩阵分割线与颜色规则一致：宏观潜力 80 以上为高潜力，技术时机 75 以上为好时机。
-- 股票池表格展示股票类型，鼠标悬停可查看识别依据。
-- 标签页查看各阶段结果。
-- 全局搜索股票代码、名称、行业和动作。
-- 表头点击排序。
-- 点击股票行查看该股票在各阶段的轨迹。
-
-### 13. 生成本地可视化报表
-
-```bash
-python scripts/run.py visualize --dataset index_constituents --index-symbol 000300
-python scripts/run.py visualize --dataset coarse --strategy all --top 5 --source cache
-python scripts/run.py visualize --dataset combo --top 20 --combo-strategy-top 20 --source cache
-python scripts/run.py visualize --dataset coarse --strategy all --top 5 --universe csi300 --source cache --output .cache/reports/coarse_csi300.html
-python scripts/run.py visualize --dataset combo --top 20 --combo-strategy-top 20 --universe csi300 --source cache --output .cache/reports/combo_csi300.html
-python scripts/run.py visualize --dataset fine --coarse-strategy all --coarse-top 5 --top 20 --universe csi300 --source cache --output .cache/reports/fine_csi300.html
-```
-
-默认输出到：
+常见输出路径：
 
 ```text
 .cache/reports/index_constituents_000300.html
-.cache/reports/coarse_all.html
 .cache/reports/combo.html
-.cache/reports/coarse_csi300.html
-.cache/reports/combo_csi300.html
-.cache/reports/fine_csi300.html
+.cache/reports/fine.html
 .cache/reports/dashboard_latest.html
 ```
 
@@ -280,7 +296,7 @@ python scripts/run.py visualize --dataset fine --coarse-strategy all --coarse-to
 默认数据库：
 
 ```text
-$SKILL/.cache/stock_data.sqlite
+.cache/stock_data.sqlite
 ```
 
 可通过环境变量指定：
@@ -303,60 +319,87 @@ export TECH_GROWTH_SCREENER_CACHE=/path/to/cache
 - `layer_runs`：每次 screen、coarse、combo、fine、plan 运行的参数、元信息和行数。
 - `layer_results`：每次层输出的完整逐行 JSON 快照，并冗余 code、name、rank、score、action 等常用查询字段。
 
-预更新依赖：
-
-- 粗筛和组合评分需要 spot、财报业绩和候选池；沪深 300 池还需要 `index_constituents`。
-- 组合评分、细筛和计划会使用 `quotes_daily`；`--universe csi300 --update-policy auto` 会按沪深 300 成分股做最近 180 天的断点续跑。
-- 科技关键词池仍使用行业板块缓存；自动日线补齐目前主要面向已缓存的沪深 300 指数池。
-
 策略层结果默认会落库。若只想临时查看输出、不保存本次结果，可加 `--no-persist-results`。
+
+## 分数和展示口径
+
+宏观粗筛分：
+
+```text
+多策略共振分 * 35%
++ 成长分 * 20%
++ 质量分 * 18%
++ 风控分 * 15%
++ 流动性分 * 7%
++ 动量分 * 5%
+```
+
+技术分：
+
+```text
+趋势分 * 30
++ 动量分 * 20
++ 量能分 * 20
++ 突破分 * 15
++ 风险分 * 10
++ 流动性分 * 5
+```
+
+dashboard 展示规则：
+
+- 金额通常以 `亿` 展示。
+- 百分比字段展示为 `%`。
+- 分数和常用数值通常保留两位小数。
+- 操作建议只展示计划字段，不展示预算、资金配置或一手成本检查。
+- 数据健康审计只做诊断，不改变筛选公式、排序或操作建议。
 
 ## 网络和代理
 
-默认情况下，程序会尝试使用环境变量或系统代理。若数据源直连更稳定，可加：
+默认情况下，程序会尝试使用环境变量或 macOS 系统代理。若数据源直连更稳定，可加：
 
 ```bash
-python scripts/run.py coarse --strategy all --no-proxy
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source auto --no-proxy
 ```
 
 也可以显式指定代理：
 
 ```bash
-python scripts/run.py coarse --strategy all --proxy http://127.0.0.1:7890
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source auto --proxy http://127.0.0.1:7890
 ```
 
-如果上游数据源失败，建议先尝试：
+如果上游数据源失败，建议按顺序尝试：
 
 - `--source cache`：只使用已有缓存。
 - `--no-proxy`：绕过系统代理。
-- `--refresh`：强制重新拉取。
+- `--refresh` 或 `--update-policy refresh`：强制重新拉取。
 
-## 输出说明
+## 验证和维护
 
-粗筛输出关注：
+运行测试：
 
-- 股票代码、名称、板块
-- 市值、PE、PB、营收同比、利润同比
-- 粗筛策略、粗筛评分、字段缺失说明
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest discover -s tests
+```
 
-细筛输出关注：
+生成 dashboard 并验证数据：
 
-- 技术评分
-- MA、MACD、RSI、成交额放大、20 日收益、回撤
-- `趋势强`、`放量突破`、`回撤可控` 等原因标签
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache
+```
 
-计划输出关注：
+检查格式：
 
-- 动作：条件买入、等待回踩、等待放量确认、观察、暂不交易
-- 突破触发价、回踩区间、放量确认成交额
-- 计划入场价、初始止损、1R/2R 止盈
-- 移动止损规则、仓位上限
-- 数据缺失原因和影响
+```bash
+git diff --check
+```
 
-## 维护文档
+更多维护说明：
 
-更详细的设计和维护说明见：
-
+- [当前项目上下文](docs/project-context.md)
+- [数据规则](docs/data-rules.md)
+- [长期决策记录](docs/decisions.md)
+- [交接记录](docs/handoff.md)
 - [项目架构](references/architecture.md)
 - [数据缓存 schema](references/data-schema.md)
 - [粗筛策略](references/coarse-strategies.md)
@@ -371,8 +414,8 @@ python scripts/run.py coarse --strategy all --proxy http://127.0.0.1:7890
 - `LICENSE`
 - 依赖锁定文件，例如 `requirements.txt`
 - 示例缓存或 mock 数据
-- CI 校验，例如运行 `python -m compileall scripts`
-- 数据源可用性说明
+- CI 校验，例如运行测试和 `git diff --check`
+- 数据源可用性与延迟说明
 
 ## 免责声明
 

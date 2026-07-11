@@ -46,6 +46,23 @@ or tech universe", not rank investability.
 Implication: prefer `match_reason`, `risk_flags`, and detailed `data_note` over
 score fields in the first dashboard table.
 
+## 2026-07-11: 股票类型规则配置化
+
+Decision: dashboard stock-type classification is loaded from
+`configs/stock_type_rules.json` by default, with `--stock-type-config` available
+for custom JSON rules. `--stock-types` filters which classified stock types enter
+the downstream dashboard stages. The original stock-pool stage remains visible
+as the full classified universe.
+
+Reason: the user needs to freely configure stock-pool types such as technology,
+cyclical, finance, defensive, or custom groups without changing Python code.
+Keeping the full classified stock pool visible preserves auditability while
+allowing the research flow to narrow the candidates passed to macro screening.
+
+Implication: stock-type matching should remain a traceable board-name keyword
+rule with `stock_type_note` explaining the matched keyword. Do not silently
+change score formulas when changing type rules.
+
 ## 2026-07-11: 宏观粗筛 Defaults To Top 100 In Dashboard
 
 Decision: dashboard macro coarse output should show up to the top 100 ranked

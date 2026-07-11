@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from dashboard.stock_types import load_stock_type_rules
 from dashboard.view_model import build_dashboard_view_model
 
 
@@ -73,6 +75,45 @@ class DashboardViewModelTest(unittest.TestCase):
         self.assertEqual(model["traces"]["000725"][0]["stage"], "sector_screen")
         self.assertEqual(model["traces"]["000725"][1]["stage"], "combo")
         self.assertEqual(model["traces"]["000725"][2]["stage"], "plan")
+
+    def test_uses_configured_stock_type_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Path(tmpdir) / "stock_type_rules.json"
+            config.write_text(
+                """
+                {
+                  "default_type": "其他",
+                  "types": [
+                    {
+                      "name": "AI算力",
+                      "enabled": true,
+                      "keywords": ["算力", "服务器"],
+                      "exclude_keywords": []
+                    }
+                  ]
+                }
+                """,
+                encoding="utf-8",
+            )
+            rules = load_stock_type_rules(str(config))
+
+        model = build_dashboard_view_model(
+            {
+                "sector_screen": pd.DataFrame(
+                    [
+                        {"code": "000001", "name": "算力样本", "board_name": "AI算力服务器"},
+                        {"code": "000002", "name": "普通样本", "board_name": "地产开发"},
+                    ]
+                )
+            },
+            {"sector_screen": {}},
+            stock_type_rules=rules,
+        )
+
+        rows = model["stages"][0]["rows"]
+        self.assertEqual(rows[0]["stock_type"], "AI算力")
+        self.assertIn("命中关键词：算力", rows[0]["stock_type_note"])
+        self.assertEqual(rows[1]["stock_type"], "其他")
 
 
 if __name__ == "__main__":

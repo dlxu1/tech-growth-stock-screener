@@ -56,6 +56,8 @@ def add_common_screen_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--universe", choices=["tech", "csi300"], default="tech", help="Candidate universe: tech keyword pool or cached CSI 300 constituents.")
     parser.add_argument("--universe-index-symbol", default="000300", help="Index symbol used when --universe csi300.")
     parser.add_argument("--sector", default="", help="Comma-separated sector terms matched against board_name after the base universe is built.")
+    parser.add_argument("--stock-type-config", default="", help="JSON config path for dashboard stock-type classification rules.")
+    parser.add_argument("--stock-types", default="", help="Comma-separated stock types allowed to enter downstream dashboard stages, e.g. 科技股,周期股.")
     parser.add_argument("--report-date", default="auto")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--no-proxy", action="store_true")

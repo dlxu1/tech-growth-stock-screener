@@ -16,7 +16,10 @@ Use this file as the first stop when a new thread needs to continue work.
 - Current visible dashboard refinements:
   - `组合评分` wording has been changed to `宏观粗筛`.
   - `板块筛选` is displayed as `股票池`; the table includes `股票类型`, and hover
-    text shows the board-name classification basis.
+    text shows the matched keyword and board-name classification basis.
+  - Stock-type classification is configurable through `configs/stock_type_rules.json`
+    or `--stock-type-config`. `--stock-types` filters which classified types
+    enter downstream dashboard stages while keeping the full stock pool visible.
   - Macro coarse table uses Chinese headers and score help hover buttons.
   - Dashboard macro coarse keeps up to 100 stocks from the stock pool.
   - Macro coarse table formats market cap as `xx.xx亿`.
@@ -33,9 +36,9 @@ Use this file as the first stop when a new thread needs to continue work.
     potential-timing matrix fills the left side, and a selected-stock
     explanation panel sits on the right. The matrix includes macro coarse plus
     technical analysis stocks, point size reflects combined attention score,
-    includes a local stock search box, and clicking a point updates the
-    right-side stock introduction. The quadrant lines match the color thresholds:
-    macro potential `>= 80` and technical timing `>= 75`.
+    includes a local stock search box and stock-type filter chips, and clicking
+    a point updates the right-side stock introduction. The quadrant lines match
+    the color thresholds: macro potential `>= 80` and technical timing `>= 75`.
   - Dashboard models now include `summary.health`, and the HTML shows a compact
     data-health strip above the matrix. Use `validate-dashboard` to print the
     same audit from the CLI.

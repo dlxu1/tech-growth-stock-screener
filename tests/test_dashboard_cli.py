@@ -22,6 +22,8 @@ class DashboardCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--output", result.stdout)
         self.assertIn("--combo-top", result.stdout)
+        self.assertIn("--stock-type-config", result.stdout)
+        self.assertIn("--stock-types", result.stdout)
         self.assertNotIn("--capital", result.stdout)
         self.assertNotIn("--target-return", result.stdout)
         self.assertNotIn("--core-etf-pct", result.stdout)

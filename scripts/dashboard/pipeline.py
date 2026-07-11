@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from dashboard.health import audit_dashboard_model
+from dashboard.stock_types import annotate_stock_types, filter_by_stock_types, load_stock_type_rules, parse_stock_types
 from dashboard.view_model import build_dashboard_view_model
 from plan.trade_plan import run_trade_plan
 from strategies import sector_screen
@@ -39,6 +40,8 @@ def _attention_ranked_candidates(fine: pd.DataFrame) -> pd.DataFrame:
 def run_dashboard(args) -> dict:
     """Run each existing stage and return a dashboard view model."""
 
+    stock_type_rules = load_stock_type_rules(getattr(args, "stock_type_config", None))
+    selected_stock_types = parse_stock_types(getattr(args, "stock_types", ""))
     sector_args = SimpleNamespace(**vars(args))
     sector_args.top = getattr(args, "sector_top", 100)
     combo_args = SimpleNamespace(**vars(args))
@@ -46,7 +49,9 @@ def run_dashboard(args) -> dict:
     fine_args = SimpleNamespace(**vars(args))
 
     sector_result, sector_meta = sector_screen.run(sector_args)
-    combo, combo_meta = run_combo(combo_args, candidates=sector_result)
+    sector_result = annotate_stock_types(sector_result, stock_type_rules)
+    combo_candidates = filter_by_stock_types(sector_result, selected_stock_types)
+    combo, combo_meta = run_combo(combo_args, candidates=combo_candidates)
     fine_args.top = len(combo) if not combo.empty else getattr(args, "top", 20)
     fine, fine_meta = run_fine(fine_args, candidates=combo)
     if not combo.empty and not fine.empty and "combo_score" in combo.columns and "combo_score" not in fine.columns:
@@ -75,6 +80,12 @@ def run_dashboard(args) -> dict:
         "fine": fine_meta,
         "plan": plan_meta,
     }
-    model = build_dashboard_view_model(stages, metas)
+    model = build_dashboard_view_model(stages, metas, stock_type_rules=stock_type_rules)
+    model["summary"]["stock_type_filter"] = {
+        "selected_types": selected_stock_types,
+        "before_count": len(sector_result),
+        "after_count": len(combo_candidates),
+        "config_path": stock_type_rules.source_path,
+    }
     model["summary"]["health"] = audit_dashboard_model(model)
     return model

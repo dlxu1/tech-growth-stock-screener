@@ -147,6 +147,10 @@ def _health_html(summary: dict) -> str:
     plan_rows = coverage.get("plan_rows", 0)
     plan_usable = coverage.get("plan_usable", 0)
     serial_text = "通过" if serial.get("ok") else "异常"
+    stock_type_filter = summary.get("stock_type_filter") or {}
+    selected_types = stock_type_filter.get("selected_types") or []
+    stock_type_text = "全部" if not selected_types else ",".join(str(item) for item in selected_types)
+    stock_type_count = f"{stock_type_filter.get('after_count', sector_rows)}/{stock_type_filter.get('before_count', sector_rows)}"
     issues = health.get("issues") or []
     issue_text = "；".join(str(issue) for issue in issues[:3]) or "当前未发现关键数据问题"
     return f"""
@@ -162,6 +166,7 @@ def _health_html(summary: dict) -> str:
         <div><span>操作建议缺日线</span><strong>{escape(str(plan_missing))}/{escape(str(plan_rows))}</strong></div>
         <div><span>操作建议可执行</span><strong>{escape(str(plan_usable))}/{escape(str(plan_rows))}</strong></div>
         <div><span>阶段串行</span><strong>{escape(serial_text)}</strong></div>
+        <div><span>类型过滤</span><strong>{escape(stock_type_text)} {escape(stock_type_count)}</strong></div>
       </div>
     </section>
     """
@@ -327,7 +332,7 @@ def render_dashboard_html(model: dict) -> str:
     }}
     .health-metrics {{
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 8px;
     }}
     .health-metrics div {{
@@ -428,6 +433,28 @@ def render_dashboard_html(model: dict) -> str:
       color: var(--muted);
       font-size: 13px;
       white-space: nowrap;
+    }}
+    .stock-type-filters {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }}
+    .stock-type-filter {{
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }}
+    .stock-type-filter.active {{
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 600;
     }}
     .matrix::before,
     .matrix::after {{
@@ -869,6 +896,7 @@ def render_dashboard_html(model: dict) -> str:
           <input id="matrixSearch" type="search" placeholder="检索矩阵股票：代码、名称、行业、动作" aria-label="检索潜力时机矩阵股票">
           <span id="matrixMatchCount" class="matrix-count"></span>
         </div>
+        <div class="stock-type-filters" id="stockTypeFilters" aria-label="按股票类型筛选矩阵股票"></div>
         <div class="matrix" id="potentialMatrix"></div>
         <div class="legend" hidden>
           <div class="legend-item"><span class="chip green">优先研究</span><div class="muted">宏观高、技术高</div></div>
@@ -919,6 +947,7 @@ def render_dashboard_html(model: dict) -> str:
     const potentialMatrix = document.getElementById("potentialMatrix");
     const matrixSearch = document.getElementById("matrixSearch");
     const matrixMatchCount = document.getElementById("matrixMatchCount");
+    const stockTypeFilters = document.getElementById("stockTypeFilters");
     const detailHost = document.getElementById("detailHost");
     const search = document.getElementById("globalSearch");
     const tableHost = document.getElementById("tableHost");
@@ -929,6 +958,7 @@ def render_dashboard_html(model: dict) -> str:
     let activeStage = data.stages[0]?.key || "";
     let sortState = {{ column: "", dir: 1 }};
     let selectedCandidateCode = "";
+    let activeStockType = "全部";
 
     function text(value) {{
       if (value === null || value === undefined || value === "") return "N/A";
@@ -1200,6 +1230,7 @@ def render_dashboard_html(model: dict) -> str:
           code,
           name: plan.name || fine.name || combo.name || sector.name || row.name || code,
           board: fine.board_name || sector.board_name || combo.board_name || "",
+          stockType: sector.stock_type || "未分类",
           macroScore,
           technicalScore,
           attention_score,
@@ -1228,6 +1259,7 @@ def render_dashboard_html(model: dict) -> str:
         item.code,
         item.name,
         item.board,
+        item.stockType,
         item.action,
         item.priority?.label,
         item.plan?.primary_strategy,
@@ -1238,8 +1270,11 @@ def render_dashboard_html(model: dict) -> str:
 
     function filterMatrixCandidates(candidates) {{
       const query = matrixQuery();
-      if (!query) return candidates;
-      return candidates.filter((item) => matrixSearchText(item).includes(query));
+      return candidates.filter((item) => {{
+        const typeMatched = activeStockType === "全部" || item.stockType === activeStockType;
+        const queryMatched = !query || matrixSearchText(item).includes(query);
+        return typeMatched && queryMatched;
+      }});
     }}
 
     function updateMatrixMatchCount(visible, total) {{
@@ -1253,6 +1288,32 @@ def render_dashboard_html(model: dict) -> str:
       if (matrixQuery() && matches.length) selectedCandidateCode = matches[0].code;
       renderPotentialTiming();
       renderCandidateDetail();
+    }}
+
+    function stockTypeOptions(candidates) {{
+      const counts = {{}};
+      for (const item of candidates) {{
+        const stockType = item.stockType || "未分类";
+        counts[stockType] = (counts[stockType] || 0) + 1;
+      }}
+      return Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-Hans-CN"));
+    }}
+
+    function renderStockTypeFilters() {{
+      if (!stockTypeFilters) return;
+      const candidates = buildCandidateModels();
+      const options = stockTypeOptions(candidates);
+      const total = candidates.length;
+      const buttons = [["全部", total], ...options].map(([label, count]) => {{
+        const active = label === activeStockType ? " active" : "";
+        return `<button type="button" class="stock-type-filter${{active}}" data-stock-type="${{escapeHtml(label)}}">${{escapeHtml(label)}} <span>${{count}}</span></button>`;
+      }}).join("");
+      stockTypeFilters.innerHTML = buttons;
+    }}
+
+    function selectFirstVisibleCandidate() {{
+      const matches = filterMatrixCandidates(buildCandidateModels());
+      selectedCandidateCode = matches[0]?.code || "";
     }}
 
     function renderStageFunnel() {{
@@ -1280,6 +1341,9 @@ def render_dashboard_html(model: dict) -> str:
     function renderPotentialTiming() {{
       const allCandidates = buildCandidateModels();
       const candidates = filterMatrixCandidates(allCandidates);
+      if (selectedCandidateCode && !candidates.some((item) => item.code === selectedCandidateCode)) {{
+        selectedCandidateCode = candidates[0]?.code || "";
+      }}
       updateMatrixMatchCount(candidates.length, allCandidates.length);
       const positioned = resolveMatrixPositions(candidates);
       const points = positioned.map((item) => {{
@@ -1379,7 +1443,7 @@ def render_dashboard_html(model: dict) -> str:
               <div class="detail-title">
                 <span class="detail-status chip ${{item.priority.tone}}">${{escapeHtml(item.action)}}</span>
                 <h2>${{escapeHtml(item.name)}} <span class="code">${{escapeHtml(item.code)}}</span></h2>
-                <div class="muted">${{escapeHtml(item.board || "细筛结果股票")}}</div>
+                <div class="muted">${{escapeHtml(item.board || "细筛结果股票")}} · ${{escapeHtml(item.stockType || "未分类")}}</div>
               </div>
               <div class="kpis">
                 <div class="kpi" data-score-help="${{escapeHtml(metricHelp("macroScore"))}}"><strong>${{scoreText(item.macroScore)}}</strong><span>${{helpLabel("宏观潜力", "macroScore")}}</span></div>
@@ -1419,6 +1483,7 @@ def render_dashboard_html(model: dict) -> str:
 
     function renderPotentialTimingDashboard() {{
       renderStageFunnel();
+      renderStockTypeFilters();
       renderPotentialTiming();
       renderCandidateDetail();
     }}
@@ -1643,6 +1708,15 @@ def render_dashboard_html(model: dict) -> str:
     }});
 
     matrixSearch?.addEventListener("input", selectFirstMatrixMatch);
+    stockTypeFilters?.addEventListener("click", (event) => {{
+      const button = event.target.closest(".stock-type-filter[data-stock-type]");
+      if (!button) return;
+      activeStockType = button.dataset.stockType || "全部";
+      selectFirstVisibleCandidate();
+      renderStockTypeFilters();
+      renderPotentialTiming();
+      renderCandidateDetail();
+    }});
     search.addEventListener("input", renderStage);
     tableHost.addEventListener("mouseover", (event) => {{
       const btn = event.target.closest(".score-info");

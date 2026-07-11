@@ -17,6 +17,11 @@ class DashboardHtmlTest(unittest.TestCase):
             "summary": {
                 "stage_counts": {"sector_screen": 2, "plan": 1},
                 "action_counts": {"等待回踩买入": 1},
+                "stock_type_filter": {
+                    "selected_types": ["科技股"],
+                    "before_count": 2,
+                    "after_count": 1,
+                },
                 "health": {
                     "health_score": 70,
                     "freshness": {"latest_trade_date": "2026-07-09", "lag_days": 1},
@@ -66,7 +71,7 @@ class DashboardHtmlTest(unittest.TestCase):
                             "match_reason": "board_name 命中：半导体",
                             "risk_flags": "净利润同比为负",
                             "stock_type": "科技股",
-                            "stock_type_note": "股票类型：科技股；识别依据：board_name=半导体",
+                            "stock_type_note": "股票类型：科技股；命中关键词：半导体；识别依据：board_name=半导体",
                             "data_note": "字段完整：市值、营收同比、净利同比、20日成交额、60日涨幅、年内最大回撤均有可用数据。",
                         }
                     ],
@@ -200,6 +205,8 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("2026-07-09", html)
         self.assertIn("操作建议缺日线", html)
         self.assertIn("8/20", html)
+        self.assertIn("类型过滤", html)
+        self.assertIn("科技股 1/2", html)
         self.assertIn("潜力看宏观，时机看技术", html)
         self.assertIn("潜力-时机矩阵", html)
         self.assertNotIn("候选优先级", html)
@@ -207,10 +214,17 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("技术分析", html)
         self.assertIn("股票类型", html)
         self.assertIn("stock_type_note", html)
-        self.assertIn("股票类型：科技股；识别依据：board_name=半导体", html)
+        self.assertIn("股票类型：科技股；命中关键词：半导体；识别依据：board_name=半导体", html)
         self.assertIn("matrixUniverse", html)
         self.assertIn('id="matrixSearch"', html)
         self.assertIn('id="matrixMatchCount"', html)
+        self.assertIn('id="stockTypeFilters"', html)
+        self.assertIn("stock-type-filter", html)
+        self.assertIn("activeStockType", html)
+        self.assertIn("renderStockTypeFilters", html)
+        self.assertIn("stockTypeOptions", html)
+        self.assertIn("selectFirstVisibleCandidate", html)
+        self.assertIn('stockTypeFilters?.addEventListener("click"', html)
         self.assertIn("filterMatrixCandidates", html)
         self.assertIn("matrixSearchText", html)
         self.assertIn("selectFirstMatrixMatch", html)

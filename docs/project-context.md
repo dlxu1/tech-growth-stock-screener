@@ -28,6 +28,7 @@ Current default dashboard output:
 
 - `scripts/run.py`: CLI entry point.
 - `scripts/dashboard/pipeline.py`: orchestrates the dashboard stage sequence.
+- `scripts/dashboard/stock_types.py`: loads configurable stock-type rules and annotates stock-pool rows.
 - `scripts/dashboard/view_model.py`: normalizes stage DataFrames into JSON for the dashboard.
 - `scripts/reports/dashboard_html.py`: renders the interactive offline dashboard.
 - `scripts/strategies/sector_screen.py`: first-stage board/universe selection.
@@ -42,8 +43,11 @@ Current default dashboard output:
   - `combo`: `宏观粗筛`
   - `fine`: `技术分析`
   - `plan`: `操作建议`
-- The stock-pool table shows a `股票类型` column, with hover text explaining
-  the board-name rule used for classification.
+- The stock-pool table shows a `股票类型` column. Classification is loaded from
+  `configs/stock_type_rules.json` by default or from `--stock-type-config`, and
+  hover text explains the matched keyword and board-name basis.
+- `--stock-types` can limit which classified stock types enter downstream
+  dashboard stages. The full classified stock pool remains visible for audit.
 - The macro coarse screen shows up to 100 fundamentally stronger stocks from the
   stock-pool result.
 - The technical analysis screen runs on all macro coarse stocks, up to 100 rows.
@@ -58,8 +62,10 @@ Current default dashboard output:
   size reflects the combined attention score, and clicking a point updates the
   right-side stock introduction. The separate candidate-priority list is hidden
   from the current UI. The matrix has its own search box for quickly filtering
-  the currently displayed matrix stocks by code, name, board, action, or reason.
-  Full stage tables remain available below the candidate overview.
+  the currently displayed matrix stocks by code, name, board, action, reason, or
+  stock type. It also has local stock-type chips for quickly filtering the matrix
+  without rerunning the pipeline. Full stage tables remain available below the
+  candidate overview.
 - Table headers should use Chinese labels where known.
 - Score headers should include an `i` help button when calculation help exists.
 - The dashboard is a static local HTML file. After renderer changes, regenerate it.

@@ -49,9 +49,13 @@ Expected display fields include:
 
 Presentation rules:
 
-- `stock_type`: classify by `board_name`, such as `科技股`, `周期股`, `金融股`,
-  `消费/防御`, or `未分类`; hover title uses `stock_type_note` to show the
-  matched board-name basis.
+- `stock_type`: classify by `board_name` using `configs/stock_type_rules.json`
+  unless `--stock-type-config` points to another JSON file. The default config
+  includes `科技股`, `周期股`, `金融股`, `消费/防御`, and `未分类`. Hover title
+  uses `stock_type_note` to show the matched keyword and board-name basis.
+- `--stock-types` can select one or more stock types, such as `科技股,周期股`,
+  for the downstream dashboard flow. The stock-pool stage still displays the
+  full classified pool; only the candidates passed to `宏观粗筛` are filtered.
 - `market_cap`: divide by `100000000`, keep two decimals, append `亿`.
 - `amount_20d`: divide by `100000000`, keep two decimals, append `亿`.
 - `revenue_yoy`, `profit_yoy`, `return_60d`, `max_drawdown_252d`: keep two decimals and append `%`.
@@ -62,7 +66,9 @@ Presentation rules:
 
 Purpose: rank the previous stage's stocks with a multi-strategy coarse score.
 It must not pull from the full base universe when the dashboard flow is serial.
-The dashboard keeps up to 100 rows for the next stage.
+The dashboard keeps up to 100 rows for the next stage. If `--stock-types` is
+provided, this stage receives only stock-pool rows whose configured
+`stock_type` is selected.
 
 Main score:
 
@@ -163,6 +169,8 @@ and technical timing `>= 75` is good timing. Do not add a separate outline or
 black-ring highlight for the top operation-advice rows; point size already
 reflects combined attention. Point hover text should explain the threshold
 comparison so red/blue/green status is not confused with the background zone.
+The matrix has local stock-type chips that filter the currently displayed
+matrix candidates by their configured `stock_type`.
 
 ### 数据健康审计
 

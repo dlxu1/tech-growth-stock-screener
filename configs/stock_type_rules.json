@@ -1,0 +1,33 @@
+{
+  "default_type": "未分类",
+  "types": [
+    {
+      "name": "科技股",
+      "enabled": true,
+      "keywords": ["半导体", "通信", "软件", "计算机", "消费电子", "光学光电子", "元件", "电子", "自动化设备", "IT服务"],
+      "exclude_keywords": [],
+      "color": "#315f9f"
+    },
+    {
+      "name": "周期股",
+      "enabled": true,
+      "keywords": ["煤炭", "有色", "钢铁", "化工", "电力", "航运", "石油", "采掘"],
+      "exclude_keywords": [],
+      "color": "#a8642a"
+    },
+    {
+      "name": "金融股",
+      "enabled": true,
+      "keywords": ["银行", "保险", "证券", "多元金融"],
+      "exclude_keywords": [],
+      "color": "#247c6d"
+    },
+    {
+      "name": "消费/防御",
+      "enabled": true,
+      "keywords": ["食品", "饮料", "医药", "家电", "农林牧渔", "公用事业"],
+      "exclude_keywords": [],
+      "color": "#6b7280"
+    }
+  ]
+}
