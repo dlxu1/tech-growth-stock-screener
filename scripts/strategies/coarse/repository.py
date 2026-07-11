@@ -70,6 +70,25 @@ def _extract_optional_metrics(raw_frames: list[pd.DataFrame]) -> pd.DataFrame:
     return metrics
 
 
+def filter_by_sector(base: pd.DataFrame, sector_text: str | None) -> tuple[pd.DataFrame, dict]:
+    """Filter a base universe by comma-separated sector terms in board_name."""
+
+    terms = [term.strip() for term in str(sector_text or "").split(",") if term.strip()]
+    meta = {
+        "sector_terms": terms,
+        "sector_filter_mode": "board_name_contains",
+        "sector_input_size": len(base),
+        "sector_filtered": len(base),
+    }
+    if not terms or base.empty:
+        return base.copy(), meta
+    board = base.get("board_name", pd.Series("", index=base.index)).fillna("").astype(str)
+    mask = board.map(lambda value: any(term in value for term in terms))
+    filtered = base[mask].copy()
+    meta["sector_filtered"] = len(filtered)
+    return filtered, meta
+
+
 def build_base_universe(args) -> tuple[pd.DataFrame, dict]:
     report_raw, financials, universe, meta = fetch_coarse_source_bundle(args)
     spot = meta.pop("spot")
@@ -84,5 +103,8 @@ def build_base_universe(args) -> tuple[pd.DataFrame, dict]:
         base = base.merge(price_metrics, on="code", how="left")
     growth_flags = base.assign(_growth_positive=_positive(base["revenue_yoy"]) & _positive(base["profit_yoy"]))
     base["industry_growth_breadth"] = growth_flags.groupby("board_name")["_growth_positive"].transform("sum")
+    sector_text = getattr(args, "sector", "")
+    if sector_text:
+        base, sector_meta = filter_by_sector(base, sector_text)
+        meta.update(sector_meta)
     return base, meta
-

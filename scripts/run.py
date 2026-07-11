@@ -21,6 +21,9 @@ from reports.fine_markdown import render_fine
 from reports.index_constituents_html import render_index_constituents_html
 from reports.markdown import render_screen
 from reports.repository import load_index_constituents as load_report_index_constituents
+from reports.allocation_markdown import render_allocation_plan
+from reports.dashboard_html import render_dashboard_html
+from reports.sector_screen_markdown import render_sector_screen
 from reports.trade_plan_markdown import render_trade_plan
 from infra.cache import read_index_constituents
 from strategies.coarse.registry import STRATEGIES as COARSE_STRATEGIES
@@ -28,6 +31,9 @@ from strategies.coarse.registry import run as run_coarse
 from strategies.coarse.registry import run_combo
 from strategies.fine.technical import run as run_fine
 from strategies import tech_growth
+from strategies import sector_screen
+from dashboard.pipeline import run_dashboard
+from allocation.personal_plan import run_allocation_plan
 from plan.trade_plan import run_trade_plan
 from infra.preflight import POLICIES, apply_update_policy
 
@@ -39,6 +45,7 @@ def add_common_screen_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-profit-yoy", type=float, default=0.0)
     parser.add_argument("--universe", choices=["tech", "csi300"], default="tech", help="Candidate universe: tech keyword pool or cached CSI 300 constituents.")
     parser.add_argument("--universe-index-symbol", default="000300", help="Index symbol used when --universe csi300.")
+    parser.add_argument("--sector", default="", help="Comma-separated sector terms matched against board_name after the base universe is built.")
     parser.add_argument("--report-date", default="auto")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--no-proxy", action="store_true")
@@ -86,6 +93,11 @@ def parse_args() -> argparse.Namespace:
     screen.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
     add_common_screen_args(screen)
 
+    sector = sub.add_parser("sector-screen", help="Run a unified sector screen from a selected base universe.")
+    sector.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
+    add_common_screen_args(sector)
+    sector.set_defaults(top=100)
+
     coarse = sub.add_parser("coarse", help="Run coarse stock-screening strategies.")
     coarse.add_argument("--strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
     coarse.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
@@ -122,6 +134,60 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
     add_common_screen_args(plan)
     plan.set_defaults(top=5)
+
+    allocation = sub.add_parser("allocation", help="Generate a personal ETF/core plus stock/satellite allocation plan.")
+    allocation.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
+    allocation.add_argument("--coarse-top", type=int, default=5)
+    allocation.add_argument("--min-amount", type=float, default=20000000.0, help="Minimum 20-day average turnover for liquidity scoring.")
+    allocation.add_argument("--breakout-buffer", type=float, default=0.003, help="Breakout trigger buffer above recent high.")
+    allocation.add_argument("--volume-multiplier", type=float, default=1.2, help="Turnover multiple required for volume confirmation.")
+    allocation.add_argument("--stop-pct", type=float, default=0.05, help="Fixed stop percentage below planned entry.")
+    allocation.add_argument("--atr-stop-multiplier", type=float, default=1.5, help="ATR multiple for stop placement.")
+    allocation.add_argument("--max-gap-up", type=float, default=0.05, help="Cancel chasing if next open gaps above latest close by this amount.")
+    allocation.add_argument("--move-stop-profit", type=float, default=0.05, help="Profit threshold for moving stop to cost.")
+    allocation.add_argument("--trailing-profit", type=float, default=0.08, help="Profit threshold for enabling trailing stop.")
+    allocation.add_argument("--trailing-drawdown", type=float, default=0.06, help="Drawdown from highest close for trailing stop.")
+    allocation.add_argument("--max-position", type=float, default=0.25, help="Maximum plan-layer single-stock position cap.")
+    allocation.add_argument("--capital", type=float, default=15000.0, help="Personal account capital in CNY.")
+    allocation.add_argument("--target-return", type=float, default=0.10, help="Annual target return used for planning context.")
+    allocation.add_argument("--core-etf-pct", type=float, default=0.60, help="Capital share reserved for technology ETF core position.")
+    allocation.add_argument("--satellite-stock-pct", type=float, default=0.20, help="Capital share reserved for individual technology stocks.")
+    allocation.add_argument("--cash-pct", type=float, default=0.20, help="Capital share kept as cash reserve.")
+    allocation.add_argument("--etf-tranches", type=int, default=3, help="Number of ETF buying tranches.")
+    allocation.add_argument("--initial-single-stock-pct", type=float, default=0.12, help="First-buy budget cap for one stock.")
+    allocation.add_argument("--max-single-stock-pct", type=float, default=0.20, help="Maximum personal-account cap for one stock.")
+    allocation.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
+    add_common_screen_args(allocation)
+    allocation.set_defaults(top=5)
+
+    dashboard = sub.add_parser("dashboard", help="Generate one interactive HTML report for all pipeline stages.")
+    dashboard.add_argument("--strategy", choices=["tech_growth"], default="tech_growth")
+    dashboard.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
+    dashboard.add_argument("--coarse-top", type=int, default=5)
+    dashboard.add_argument("--combo-strategy-top", type=int, default=20, help="Candidates retained from each combo component strategy before aggregation.")
+    dashboard.add_argument("--min-amount", type=float, default=20000000.0, help="Minimum 20-day average turnover for liquidity scoring.")
+    dashboard.add_argument("--breakout-buffer", type=float, default=0.003, help="Breakout trigger buffer above recent high.")
+    dashboard.add_argument("--volume-multiplier", type=float, default=1.2, help="Turnover multiple required for volume confirmation.")
+    dashboard.add_argument("--stop-pct", type=float, default=0.05, help="Fixed stop percentage below planned entry.")
+    dashboard.add_argument("--atr-stop-multiplier", type=float, default=1.5, help="ATR multiple for stop placement.")
+    dashboard.add_argument("--max-gap-up", type=float, default=0.05, help="Cancel chasing if next open gaps above latest close by this amount.")
+    dashboard.add_argument("--move-stop-profit", type=float, default=0.05, help="Profit threshold for moving stop to cost.")
+    dashboard.add_argument("--trailing-profit", type=float, default=0.08, help="Profit threshold for enabling trailing stop.")
+    dashboard.add_argument("--trailing-drawdown", type=float, default=0.06, help="Drawdown from highest close for trailing stop.")
+    dashboard.add_argument("--max-position", type=float, default=0.25, help="Maximum plan-layer single-stock position cap.")
+    dashboard.add_argument("--capital", type=float, default=15000.0, help="Personal account capital in CNY.")
+    dashboard.add_argument("--target-return", type=float, default=0.10, help="Annual target return used for planning context.")
+    dashboard.add_argument("--core-etf-pct", type=float, default=0.60, help="Capital share reserved for technology ETF core position.")
+    dashboard.add_argument("--satellite-stock-pct", type=float, default=0.20, help="Capital share reserved for individual technology stocks.")
+    dashboard.add_argument("--cash-pct", type=float, default=0.20, help="Capital share kept as cash reserve.")
+    dashboard.add_argument("--etf-tranches", type=int, default=3, help="Number of ETF buying tranches.")
+    dashboard.add_argument("--initial-single-stock-pct", type=float, default=0.12, help="First-buy budget cap for one stock.")
+    dashboard.add_argument("--max-single-stock-pct", type=float, default=0.20, help="Maximum personal-account cap for one stock.")
+    dashboard.add_argument("--sector-top", type=int, default=100, help="Maximum rows retained in the dashboard sector-screen stage.")
+    dashboard.add_argument("--format", choices=["html"], default="html")
+    dashboard.add_argument("--output", help="HTML output path. Defaults to .cache/reports/dashboard_latest.html.")
+    add_common_screen_args(dashboard)
+    dashboard.set_defaults(top=5)
 
     visualize = sub.add_parser("visualize", help="Generate local visual reports from the SQLite cache.")
     visualize.add_argument("--dataset", choices=["index_constituents", "coarse", "combo", "fine"], default="index_constituents")
@@ -182,6 +248,16 @@ def main() -> int:
             result, stats = tech_growth.run(args)
             render_result(result, stats, args.format)
             return 0
+        if args.command == "sector-screen":
+            result, meta = sector_screen.run(args)
+            if args.format == "json":
+                clean = result.astype(object).where(pd.notna(result), None)
+                print(json.dumps({"meta": meta, "data": clean.to_dict(orient="records")}, ensure_ascii=False, indent=2))
+            elif args.format == "csv":
+                result.to_csv(sys.stdout, index=False)
+            else:
+                print(render_sector_screen(result, meta))
+            return 0
         if args.command == "coarse":
             result, meta = run_coarse(args)
             if args.format == "json":
@@ -221,6 +297,23 @@ def main() -> int:
                 result.to_csv(sys.stdout, index=False)
             else:
                 print(render_trade_plan(result, meta))
+            return 0
+        if args.command == "allocation":
+            result, meta = run_allocation_plan(args)
+            if args.format == "json":
+                clean = result.astype(object).where(pd.notna(result), None)
+                print(json.dumps({"meta": meta, "data": clean.to_dict(orient="records")}, ensure_ascii=False, indent=2))
+            elif args.format == "csv":
+                result.to_csv(sys.stdout, index=False)
+            else:
+                print(render_allocation_plan(result, meta))
+            return 0
+        if args.command == "dashboard":
+            model = run_dashboard(args)
+            output = Path(args.output) if args.output else cache_dir() / "reports" / "dashboard_latest.html"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(render_dashboard_html(model), encoding="utf-8")
+            print(json.dumps({"output": str(output.resolve()), "stages": len(model.get("stages", []))}, ensure_ascii=False, indent=2))
             return 0
         if args.command == "visualize":
             if args.dataset == "index_constituents":

@@ -437,8 +437,20 @@ def run_one(args, strategy_name: str) -> tuple[pd.DataFrame, dict]:
     return selected[cols], meta
 
 
-def run_combo(args) -> tuple[pd.DataFrame, dict]:
+def _base_for_combo(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
     base, meta = coarse_repository.build_base_universe(args)
+    if candidates is None:
+        return base, meta
+    if candidates.empty or "code" not in candidates.columns:
+        return base.iloc[0:0].copy(), {**meta, "upstream_candidates": 0}
+    codes = candidates["code"].astype(str).str.zfill(6).dropna().unique().tolist()
+    filtered = base[base["code"].astype(str).str.zfill(6).isin(codes)].copy()
+    meta.update({"upstream_stage": "sector_screen", "upstream_candidates": len(codes)})
+    return filtered, meta
+
+
+def run_combo(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
+    base, meta = _base_for_combo(args, candidates)
     if base.empty:
         meta.update({"strategy": "potential_combo", "top": args.top, "selected": 0})
         result = pd.DataFrame(columns=COMBO_OUTPUT_COLUMNS)

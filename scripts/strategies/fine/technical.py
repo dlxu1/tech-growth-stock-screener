@@ -283,8 +283,35 @@ def _score_one(candidate: pd.Series, group: pd.DataFrame, min_amount: float) -> 
     }
 
 
-def run(args) -> tuple[pd.DataFrame, dict]:
-    coarse, coarse_meta = fine_repository.coarse_candidates(args)
+def _candidates_from_previous_stage(candidates: pd.DataFrame) -> pd.DataFrame:
+    if candidates.empty or "code" not in candidates.columns:
+        return pd.DataFrame(columns=["code", "name", "board_name", "coarse_strategies", "coarse_score"])
+    out = candidates.copy()
+    for col in ["name", "board_name"]:
+        if col not in out.columns:
+            out[col] = ""
+    if "coarse_strategies" not in out.columns:
+        out["coarse_strategies"] = out["matched_strategies"] if "matched_strategies" in out.columns else ""
+    if "coarse_score" not in out.columns:
+        out["coarse_score"] = out["combo_score"] if "combo_score" in out.columns else 0.0
+    grouped = (
+        out.groupby("code", as_index=False)
+        .agg(
+            name=("name", "first"),
+            board_name=("board_name", "first"),
+            coarse_strategies=("coarse_strategies", lambda values: ",".join(dict.fromkeys(values.astype(str)))),
+            coarse_score=("coarse_score", "max"),
+        )
+    )
+    return grouped
+
+
+def run(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
+    if candidates is None:
+        coarse, coarse_meta = fine_repository.coarse_candidates(args)
+    else:
+        coarse = _candidates_from_previous_stage(candidates)
+        coarse_meta = {"upstream_stage": "combo", "upstream_candidates": len(candidates)}
     meta = {
         **coarse_meta,
         "strategy": "technical",

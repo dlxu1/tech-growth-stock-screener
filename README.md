@@ -11,6 +11,7 @@
 - 组合评分：聚合成长、质量、风控、流动性和市场确认策略，输出潜力股研究清单。
 - 细筛策略：读取日线行情，计算 MA、MACD、RSI、成交额放大、突破、回撤、ATR 等技术指标，并输出技术评分。
 - 计划层：根据细筛结果生成下一交易日规则计划，包括突破价、回踩区间、放量阈值、计划入场价、初始止损、止盈、移动止损和仓位上限。
+- 个人配置计划：在计划层基础上叠加账户资金约束，输出 ETF 核心仓、个股卫星仓、现金预留和一手成本检查。
 - SQLite 缓存：远程数据和日线行情会缓存到本地数据库，支持离线复用。
 - 按需更新：筛选、细筛、计划和可视化命令可用 `--update-policy` 在运行前自动检查并增量更新必要数据。
 - 多格式输出：支持 Markdown、JSON、CSV。
@@ -25,6 +26,7 @@ flowchart TD
   CLI --> Coarse["coarse 粗筛"]
   CLI --> Fine["fine 细筛"]
   CLI --> Plan["plan 计划"]
+  CLI --> Allocation["allocation 个人配置"]
   CLI --> Screen["screen 严格筛选"]
 
   Sync --> Sources["data/sources.py 源适配"]
@@ -34,14 +36,17 @@ flowchart TD
   Coarse --> CoarseLayer["strategies/coarse"]
   Fine --> FineLayer["strategies/fine"]
   Plan --> PlanLayer["plan/trade_plan.py"]
+  Allocation --> AllocationLayer["allocation/personal_plan.py"]
 
   CoarseLayer --> DB
   FineLayer --> DB
   PlanLayer --> DB
+  AllocationLayer --> PlanLayer
 
   CoarseLayer --> Reports["reports Markdown/JSON/CSV"]
   FineLayer --> Reports
   PlanLayer --> Reports
+  AllocationLayer --> Reports
   Screen --> Reports
 ```
 
@@ -61,6 +66,8 @@ scripts/
     trade_plan.py        # 下一交易日计划逻辑
     repository.py        # 计划层缓存读取
     network.py           # 计划层数据刷新 hook
+  allocation/
+    personal_plan.py     # 小资金账户的 ETF 核心仓 + 个股卫星仓配置
   reports/               # 展示层
 references/              # 架构、schema、策略和计划规则文档
 ```
@@ -146,16 +153,91 @@ python scripts/run.py combo --top 20 --combo-strategy-top 20 --universe csi300 -
 python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --format markdown
 ```
 
-### 8. 离线运行
+### 8. 运行板块筛选
+
+从指定基础股票池里按板块字段过滤，并最多保留 100 只股票：
+
+```bash
+python scripts/run.py sector-screen --universe csi300 --sector 半导体 --top 100 --source cache
+python scripts/run.py sector-screen --universe tech --sector 通信设备 --top 100 --source cache
+```
+
+说明：
+
+- `--universe csi300` 使用缓存的沪深 300 成分股。
+- `--universe tech` 使用科技行业关键词池。
+- `--sector` 当前按 `board_name` / 财报行业字段做包含匹配。
+- “半导体”这类行业字段可以过滤；“光模块、先进封装”这类细分概念需要后续接入概念板块成分数据才可精确过滤。
+
+### 9. 生成个人科技股配置计划
+
+适合把 15000 元这类小资金账户落成“科技 ETF 核心仓 + 个股卫星仓 + 现金预留”的规则计划：
+
+```bash
+python scripts/run.py allocation --capital 15000 --source cache --format markdown
+```
+
+默认规则：
+
+- 60% 科技 ETF 核心仓，分 3 笔买入。
+- 20% 个股卫星仓。
+- 20% 现金预留。
+- 单只个股首次买入上限 12%，单只个股最大上限 20%。
+- 对 A 股个股按 100 股一手估算成本；一手成本超过仓位上限的标的只作为风向标。
+
+可调整参数：
+
+```bash
+python scripts/run.py allocation \
+  --capital 15000 \
+  --core-etf-pct 0.60 \
+  --satellite-stock-pct 0.20 \
+  --cash-pct 0.20 \
+  --target-return 0.10 \
+  --format markdown
+```
+
+### 10. 离线运行
 
 如果已有缓存，可使用：
 
 ```bash
 python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --source cache
 python scripts/run.py plan --coarse-strategy all --coarse-top 5 --top 5 --update-policy cache
+python scripts/run.py sector-screen --universe csi300 --sector 半导体 --top 100 --source cache
+python scripts/run.py allocation --capital 15000 --source cache
 ```
 
-### 9. 生成本地可视化报表
+### 11. 生成交互式流程仪表盘
+
+把一次运行中的板块筛选、组合评分、技术细筛、操作计划和个人配置汇总到一个可交互 HTML：
+
+```bash
+python scripts/run.py dashboard --capital 15000 --source cache
+python scripts/run.py dashboard --universe csi300 --sector 半导体 --capital 15000 --source cache
+```
+
+默认输出：
+
+```text
+.cache/reports/dashboard_latest.html
+```
+
+也可以指定路径：
+
+```bash
+python scripts/run.py dashboard --capital 15000 --source cache --output .cache/reports/dashboard_latest.html
+```
+
+仪表盘支持：
+
+- 顶部总览资金、阶段行数和最终动作分布。
+- 标签页查看各阶段结果。
+- 全局搜索股票代码、名称、行业和动作。
+- 表头点击排序。
+- 点击股票行查看该股票在各阶段的轨迹。
+
+### 12. 生成本地可视化报表
 
 ```bash
 python scripts/run.py visualize --dataset index_constituents --index-symbol 000300
@@ -175,6 +257,7 @@ python scripts/run.py visualize --dataset fine --coarse-strategy all --coarse-to
 .cache/reports/coarse_csi300.html
 .cache/reports/combo_csi300.html
 .cache/reports/fine_csi300.html
+.cache/reports/dashboard_latest.html
 ```
 
 ## 数据缓存
