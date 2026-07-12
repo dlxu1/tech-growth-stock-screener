@@ -37,6 +37,91 @@ def _attention_ranked_candidates(fine: pd.DataFrame) -> pd.DataFrame:
     return ranked.sort_values(["attention_score", "coarse_score", "technical_score"], ascending=[False, False, False]).copy()
 
 
+def _build_backtest_model(model: dict, args) -> dict | None:
+    if getattr(args, "_skip_backtest", False):
+        return None
+    signal_inputs = _build_signal_inputs(model, args)
+    if signal_inputs is None:
+        return None
+    signal_date, candidates, quotes, _signal_model = signal_inputs
+
+    from backtest.signal_backtest import build_signal_backtest_model, parse_holding_days
+
+    return build_signal_backtest_model(
+        candidates,
+        quotes,
+        signal_date=signal_date,
+        top=int(getattr(args, "backtest_top", 10) or 10),
+        holding_days=parse_holding_days(getattr(args, "holding_days", "")),
+    )
+
+
+def _build_signal_validation_model(model: dict, args) -> dict | None:
+    if getattr(args, "_skip_signal_validation", False):
+        return None
+    signal_inputs = _build_signal_inputs(model, args)
+    if signal_inputs is None:
+        return None
+    signal_date, candidates, quotes, _signal_model = signal_inputs
+
+    from backtest.signal_backtest import build_signal_validation_model, parse_holding_days
+
+    return build_signal_validation_model(
+        candidates,
+        quotes,
+        signal_date=signal_date,
+        holding_days=parse_holding_days(getattr(args, "holding_days", "")),
+        bucket_size=int(getattr(args, "bucket_size", 10) or 10),
+    )
+
+
+def _build_operation_backtest_model(model: dict, args) -> dict | None:
+    if getattr(args, "_skip_operation_backtest", False):
+        return None
+    signal_inputs = _build_signal_inputs(model, args)
+    if signal_inputs is None:
+        return None
+    signal_date, _candidates, quotes, signal_model = signal_inputs
+
+    from backtest.operation_backtest import DEFAULT_PROFIT_TARGET_PCT, build_operation_backtest_model, plans_from_dashboard_model
+
+    plans = plans_from_dashboard_model(signal_model)
+    return build_operation_backtest_model(
+        plans,
+        quotes,
+        signal_date=signal_date,
+        profit_target_pct=float(getattr(args, "operation_profit_target", DEFAULT_PROFIT_TARGET_PCT) or DEFAULT_PROFIT_TARGET_PCT),
+    )
+
+
+def _build_signal_inputs(model: dict, args) -> tuple[str, pd.DataFrame, pd.DataFrame, dict] | None:
+    if getattr(args, "_signal_inputs", None) is not None:
+        return getattr(args, "_signal_inputs")
+    signal_date = str(getattr(args, "backtest_date", "") or getattr(args, "as_of_date", "") or "").strip()
+    if not signal_date:
+        return None
+
+    from backtest.repository import load_forward_quotes
+    from backtest.signal_backtest import candidates_from_dashboard_model
+
+    signal_model = model
+    matrix_date = str(getattr(args, "as_of_date", "") or "").strip()
+    if signal_date != matrix_date:
+        signal_args = SimpleNamespace(**vars(args))
+        signal_args.as_of_date = signal_date
+        signal_args.backtest_date = ""
+        signal_args._skip_backtest = True
+        signal_args._skip_signal_validation = True
+        signal_model = run_dashboard(signal_args)
+
+    candidates = candidates_from_dashboard_model(signal_model)
+    codes = candidates["code"].astype(str).str.zfill(6).dropna().unique().tolist() if "code" in candidates.columns else []
+    quotes = load_forward_quotes(codes, after_date=signal_date)
+    result = (signal_date, candidates, quotes, signal_model)
+    setattr(args, "_signal_inputs", result)
+    return result
+
+
 def run_dashboard(args) -> dict:
     """Run each existing stage and return a dashboard view model."""
 
@@ -87,5 +172,19 @@ def run_dashboard(args) -> dict:
         "after_count": len(combo_candidates),
         "config_path": stock_type_rules.source_path,
     }
+    model["summary"]["as_of_date"] = getattr(args, "as_of_date", "") or ""
+    model["summary"]["backtest_date"] = getattr(args, "backtest_date", "") or getattr(args, "as_of_date", "") or ""
+    model["summary"]["universe"] = getattr(args, "universe", "") or ""
+    model["summary"]["universe_index_symbol"] = getattr(args, "universe_index_symbol", "") or ""
+    model["summary"]["sector"] = getattr(args, "sector", "") or ""
     model["summary"]["health"] = audit_dashboard_model(model)
+    backtest = _build_backtest_model(model, args)
+    if backtest is not None:
+        model["backtest"] = backtest
+    signal_validation = _build_signal_validation_model(model, args)
+    if signal_validation is not None:
+        model["signal_validation"] = signal_validation
+    operation_backtest = _build_operation_backtest_model(model, args)
+    if operation_backtest is not None:
+        model["operation_backtest"] = operation_backtest
     return model

@@ -325,7 +325,7 @@ def run(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dic
         persist_layer_result("fine", args, result, meta)
         return result, meta
     codes = coarse["code"].astype(str).str.zfill(6).tolist()
-    quotes = fine_repository.load_quotes(codes)
+    quotes = fine_repository.load_quotes(codes, as_of_date=getattr(args, "as_of_date", None))
     rows = []
     for candidate in coarse.itertuples(index=False):
         code = str(candidate.code).zfill(6)

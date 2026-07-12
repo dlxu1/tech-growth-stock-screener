@@ -29,6 +29,10 @@
 - 操作建议：按规则生成 `观察`、`条件买入`、`等待回踩`、`等待放量确认`、`暂不交易` 等下一交易日计划字段。
 - 潜力-时机矩阵：以宏观潜力为 x 轴、技术时机为 y 轴，点大小代表综合关注分，点击点位更新右侧股票介绍。
 - 矩阵内检索：dashboard 支持按股票代码、名称、行业/板块、动作和原因快速检索当前矩阵内股票。
+- 历史日期重算：本地 `dashboard-server` 支持按 `as_of_date` 重跑完整串行流程，查看矩阵评分在历史日期下的变化。
+- 数据回测：可单独指定回测信号日，分别回测 `宏观潜力 Top10`、`技术分 Top10`、`综合关注 Top10` 的 7/14/21 个交易日固定持有收益。
+- 操作回测：按高潜力+好时机股票的 `操作建议` 模拟触发买入，并按 A 股 T+1 检查 5%止盈、初始止损或持有至最新缓存行情，用于评估执行规则。
+- 信号验证与预警：dashboard 可展示矩阵象限和综合关注分分桶的历史验证结果，用于观察 `好时机+高潜力` 是否真的跑赢其他象限。
 - 数据健康审计：`validate-dashboard` 和 dashboard 顶部健康条会提示行情新鲜度、缺失覆盖、可执行计划数和阶段串行关系。
 - SQLite 缓存：远程数据与日线行情默认缓存到项目本地 `.cache/stock_data.sqlite`，支持离线复用。
 - 多格式输出：主要 CLI 支持 Markdown、JSON、CSV；dashboard 输出静态 HTML。
@@ -43,6 +47,9 @@ flowchart TD
   CLI --> Fine["fine 技术分析"]
   CLI --> Plan["plan 操作建议"]
   CLI --> Dashboard["dashboard 交互 HTML"]
+  CLI --> Backtest["signal-backtest 数据回测"]
+  CLI --> OperationBacktest["operation-backtest 操作回测"]
+  CLI --> SignalValidate["signal-validate 信号验证"]
   CLI --> Validate["validate-dashboard 数据健康审计"]
   CLI --> Allocation["allocation 可选个人配置"]
 
@@ -58,6 +65,12 @@ flowchart TD
   Dashboard --> Combo
   Dashboard --> Fine
   Dashboard --> Plan
+  Backtest --> Dashboard
+  Backtest --> DB
+  OperationBacktest --> Dashboard
+  OperationBacktest --> DB
+  SignalValidate --> Dashboard
+  SignalValidate --> DB
   Validate --> Dashboard
   Allocation --> Plan
 ```
@@ -71,6 +84,7 @@ scripts/
   infra/                 # 基建层：缓存、网络策略、预更新、日志
   data/                  # 数据源适配层：AKShare/Sina/efinance/Eastmoney/CSV
   dashboard/             # dashboard 串行流程、view model、健康审计
+  backtest/              # 单日期评分信号固定持有期回测
   strategies/
     tech_growth.py       # 原始严格筛选策略
     sector_screen.py     # 股票池筛选
@@ -133,13 +147,15 @@ python3 -m venv .venv
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
 ```
 
+dashboard、dashboard-server 和 validate-dashboard 默认使用沪深 300 缓存成分池。
+
 按行业/板块过滤：
 
 ```bash
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --universe tech --sector 半导体 --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
 ```
 
-使用沪深 300 作为基础池：
+显式指定沪深 300 作为基础池：
 
 ```bash
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --universe csi300 --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
@@ -157,6 +173,20 @@ python3 -m venv .venv
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --stock-type-config /Users/xudoulei/work/tech-growth-stock-screener/configs/stock_type_rules.json
 ```
 
+生成历史日期快照：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --as-of-date 2026-06-30 --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
+```
+
+启动本地交互服务后，可以在矩阵上方切换历史日期并重算完整流程：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard-server --source cache --host 127.0.0.1 --port 5001
+```
+
+日期切换会保留当前股票池、指数代码、行业过滤和股票类型过滤；如果本地没有所选日期之前的沪深 300 成分快照，会使用最近缓存的成分快照，并继续按所选日期截断行情和财报。
+
 默认输出：
 
 ```text
@@ -172,10 +202,44 @@ dashboard 支持：
 - 矩阵分割线与颜色阈值一致：宏观潜力 `>= 80` 为高潜力，技术时机 `>= 75` 为好时机。
 - 矩阵搜索框可按代码、名称、板块、动作、原因和策略快速过滤股票。
 - 矩阵股票类型 chips 可按当前矩阵内的股票类型快速过滤展示。
+- 矩阵日期选择器在本地服务模式下会按所选日期截断日线行情并重跑完整流程。
+- `数据回测` 模块有独立的回测信号日选择器：矩阵日期可以保持不变，回测可以选择更早日期以获得完整未来持有样本。
+- `操作回测` 模块对高潜力+好时机且操作建议可执行的股票，模拟计划入场，并按 A 股 T+1 检查 5%止盈、初始止损和持有至最新缓存行情。
+- `信号验证与预警` 模块展示同一信号日下各持有期的矩阵象限收益、胜率和综合关注分分桶表现，用于识别象限失效风险。
 - 点击矩阵股票点后，右侧股票介绍会更新为该股票的宏观潜力、技术时机和操作建议说明。
 - 完整阶段表格保留在页面下方，默认折叠/弱化展示，便于追溯明细。
 
-### 4. 验证 dashboard 数据健康
+### 4. 运行数据回测
+
+单独输出 Markdown 回测报告：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py signal-backtest --source cache --as-of-date 2026-06-30 --format markdown
+```
+
+也可以显式指定回测信号日；如果同时传入 `--as-of-date` 和 `--backtest-date`，回测使用 `--backtest-date`：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py signal-backtest --source cache --backtest-date 2026-06-30 --format markdown
+```
+
+输出 JSON，便于后续分析：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py signal-backtest --source cache --as-of-date 2026-06-30 --format json
+```
+
+默认规则：按回测信号日先重跑 dashboard 串行流程，分别取 `宏观潜力 Top10`、`技术分 Top10` 和 `综合关注 Top10`，以下一交易日开盘价为买入价，按第 7/14/21 个未来交易日收盘价计算收益。该模块只用于信号复核，不包含仓位、调仓、交易成本或个人资金配置。
+
+运行操作回测：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py operation-backtest --source cache --backtest-date 2026-05-25 --format markdown
+```
+
+默认规则：只模拟 `宏观潜力 >= 80` 且 `技术时机 >= 75`、并且 `操作建议` 可执行的股票。按计划入场价触发买入，遵循 A 股 T+1，从买入后的下一交易日起检查 5% 收益止盈或跌破 `initial_stop` 止损；如果一直未触发买入则记为 `未触发`，如果买入后未止盈/止损则按最新缓存收盘价计算浮动收益。
+
+### 5. 验证 dashboard 数据健康
 
 ```bash
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache
@@ -192,7 +256,7 @@ dashboard 支持：
 - 最新行情日是否符合预期。
 - 已知 0-100 分数字段是否越界。
 
-### 5. 单独运行各阶段
+### 6. 单独运行各阶段
 
 股票池：
 
@@ -225,7 +289,7 @@ dashboard 支持：
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py screen --top 30 --source cache --format markdown
 ```
 
-### 6. 按需更新策略
+### 7. 按需更新策略
 
 不加 `--update-policy` 时，命令保持当前缓存/数据源行为。需要运行前自动补数据时可使用：
 

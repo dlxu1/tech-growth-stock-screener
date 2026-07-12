@@ -20,10 +20,13 @@ from reports.fine_html import render_fine_html
 from reports.fine_markdown import render_fine
 from reports.index_constituents_html import render_index_constituents_html
 from reports.markdown import render_screen
+from reports.operation_backtest_markdown import render_operation_backtest
 from reports.repository import load_index_constituents as load_report_index_constituents
 from reports.allocation_markdown import render_allocation_plan
 from reports.dashboard_html import render_dashboard_html
 from reports.sector_screen_markdown import render_sector_screen
+from reports.signal_backtest_markdown import render_signal_backtest
+from reports.signal_validation_markdown import render_signal_validation
 from reports.trade_plan_markdown import render_trade_plan
 from dashboard.health import audit_dashboard_model, render_health_markdown
 from infra.cache import read_index_constituents
@@ -34,7 +37,10 @@ from strategies.fine.technical import run as run_fine
 from strategies import tech_growth
 from strategies import sector_screen
 from dashboard.pipeline import run_dashboard
+from dashboard.server import serve_dashboard
 from allocation.personal_plan import run_allocation_plan
+from backtest.operation_backtest import run_operation_backtest
+from backtest.signal_backtest import run_signal_backtest, run_signal_validation
 from plan.trade_plan import run_trade_plan
 from infra.preflight import POLICIES, apply_update_policy
 
@@ -58,6 +64,7 @@ def add_common_screen_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sector", default="", help="Comma-separated sector terms matched against board_name after the base universe is built.")
     parser.add_argument("--stock-type-config", default="", help="JSON config path for dashboard stock-type classification rules.")
     parser.add_argument("--stock-types", default="", help="Comma-separated stock types allowed to enter downstream dashboard stages, e.g. 科技股,周期股.")
+    parser.add_argument("--as-of-date", default="", help="Historical dashboard cutoff date, e.g. 2026-06-30. Daily quotes after this date are ignored.")
     parser.add_argument("--report-date", default="auto")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--no-proxy", action="store_true")
@@ -72,6 +79,16 @@ def add_common_screen_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--update-spot-max-age-days", type=int, default=1, help="Maximum accepted spot quote cache age before pre-run update.")
     parser.add_argument("--update-index-max-age-days", type=int, default=7, help="Maximum accepted index constituent cache age before pre-run update.")
     parser.add_argument("--no-persist-results", action="store_true", help="Do not persist this command's layer outputs into SQLite.")
+
+
+def add_backtest_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--backtest-date", default="", help="Signal date used for fixed-horizon backtests. Defaults to --as-of-date.")
+    parser.add_argument("--backtest-top", type=int, default=10, help="Top ranked stocks selected for each signal strategy.")
+    parser.add_argument("--holding-days", default="7,14,21", help="Comma-separated holding horizons in trading days.")
+
+
+def add_operation_backtest_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--operation-profit-target", type=float, default=0.05, help="Profit target for operation backtests, e.g. 0.05 means sell at +5%%.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -207,8 +224,42 @@ def parse_args() -> argparse.Namespace:
     dashboard.add_argument("--combo-top", type=int, default=100, help="Maximum rows retained in the dashboard macro coarse stage.")
     dashboard.add_argument("--format", choices=["html"], default="html")
     dashboard.add_argument("--output", help="HTML output path. Defaults to .cache/reports/dashboard_latest.html.")
+    add_backtest_args(dashboard)
+    add_operation_backtest_args(dashboard)
     add_common_screen_args(dashboard)
-    dashboard.set_defaults(top=5)
+    dashboard.set_defaults(top=5, universe="csi300")
+
+    dashboard_server = sub.add_parser(
+        "dashboard-server",
+        help="Serve the interactive dashboard locally and recalculate it when the as-of date changes.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            f"  {_command_example('dashboard-server', '--source', 'cache', '--host', '127.0.0.1', '--port', '5001')}"
+        ),
+    )
+    dashboard_server.add_argument("--strategy", choices=["tech_growth"], default="tech_growth")
+    dashboard_server.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
+    dashboard_server.add_argument("--coarse-top", type=int, default=5)
+    dashboard_server.add_argument("--combo-strategy-top", type=int, default=20, help="Candidates retained from each combo component strategy before aggregation.")
+    dashboard_server.add_argument("--min-amount", type=float, default=20000000.0, help="Minimum 20-day average turnover for liquidity scoring.")
+    dashboard_server.add_argument("--breakout-buffer", type=float, default=0.003, help="Breakout trigger buffer above recent high.")
+    dashboard_server.add_argument("--volume-multiplier", type=float, default=1.2, help="Turnover multiple required for volume confirmation.")
+    dashboard_server.add_argument("--stop-pct", type=float, default=0.05, help="Fixed stop percentage below planned entry.")
+    dashboard_server.add_argument("--atr-stop-multiplier", type=float, default=1.5, help="ATR multiple for stop placement.")
+    dashboard_server.add_argument("--max-gap-up", type=float, default=0.05, help="Cancel chasing if next open gaps above latest close by this amount.")
+    dashboard_server.add_argument("--move-stop-profit", type=float, default=0.05, help="Profit threshold for moving stop to cost.")
+    dashboard_server.add_argument("--trailing-profit", type=float, default=0.08, help="Profit threshold for enabling trailing stop.")
+    dashboard_server.add_argument("--trailing-drawdown", type=float, default=0.06, help="Drawdown from highest close for trailing stop.")
+    dashboard_server.add_argument("--max-position", type=float, default=0.25, help="Maximum plan-layer single-stock position cap.")
+    dashboard_server.add_argument("--sector-top", type=int, default=100, help="Maximum rows retained in the dashboard sector-screen stage.")
+    dashboard_server.add_argument("--combo-top", type=int, default=100, help="Maximum rows retained in the dashboard macro coarse stage.")
+    dashboard_server.add_argument("--host", default="127.0.0.1", help="Local host address for the dashboard server.")
+    dashboard_server.add_argument("--port", type=int, default=5001, help="Local port for the dashboard server.")
+    add_backtest_args(dashboard_server)
+    add_operation_backtest_args(dashboard_server)
+    add_common_screen_args(dashboard_server)
+    dashboard_server.set_defaults(top=5, universe="csi300")
 
     validate_dashboard = sub.add_parser(
         "validate-dashboard",
@@ -238,7 +289,87 @@ def parse_args() -> argparse.Namespace:
     validate_dashboard.add_argument("--expected-latest-trade-date", help="Expected latest trade date, e.g. 2026-07-10.")
     validate_dashboard.add_argument("--format", choices=["markdown", "json"], default="markdown")
     add_common_screen_args(validate_dashboard)
-    validate_dashboard.set_defaults(top=5)
+    validate_dashboard.set_defaults(top=5, universe="csi300")
+
+    signal_backtest = sub.add_parser(
+        "signal-backtest",
+        help="Backtest single-date dashboard score signals over fixed holding horizons.",
+    )
+    signal_backtest.add_argument("--strategy", choices=["tech_growth"], default="tech_growth")
+    signal_backtest.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
+    signal_backtest.add_argument("--coarse-top", type=int, default=5)
+    signal_backtest.add_argument("--combo-strategy-top", type=int, default=20)
+    signal_backtest.add_argument("--min-amount", type=float, default=20000000.0)
+    signal_backtest.add_argument("--breakout-buffer", type=float, default=0.003)
+    signal_backtest.add_argument("--volume-multiplier", type=float, default=1.2)
+    signal_backtest.add_argument("--stop-pct", type=float, default=0.05)
+    signal_backtest.add_argument("--atr-stop-multiplier", type=float, default=1.5)
+    signal_backtest.add_argument("--max-gap-up", type=float, default=0.05)
+    signal_backtest.add_argument("--move-stop-profit", type=float, default=0.05)
+    signal_backtest.add_argument("--trailing-profit", type=float, default=0.08)
+    signal_backtest.add_argument("--trailing-drawdown", type=float, default=0.06)
+    signal_backtest.add_argument("--max-position", type=float, default=0.25)
+    signal_backtest.add_argument("--sector-top", type=int, default=100)
+    signal_backtest.add_argument("--combo-top", type=int, default=100)
+    add_backtest_args(signal_backtest)
+    signal_backtest.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
+    add_common_screen_args(signal_backtest)
+    signal_backtest.set_defaults(top=5, universe="csi300")
+
+    signal_validate = sub.add_parser(
+        "signal-validate",
+        help="Validate dashboard score signals by matrix quadrant and attention-score buckets.",
+    )
+    signal_validate.add_argument("--strategy", choices=["tech_growth"], default="tech_growth")
+    signal_validate.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
+    signal_validate.add_argument("--coarse-top", type=int, default=5)
+    signal_validate.add_argument("--combo-strategy-top", type=int, default=20)
+    signal_validate.add_argument("--min-amount", type=float, default=20000000.0)
+    signal_validate.add_argument("--breakout-buffer", type=float, default=0.003)
+    signal_validate.add_argument("--volume-multiplier", type=float, default=1.2)
+    signal_validate.add_argument("--stop-pct", type=float, default=0.05)
+    signal_validate.add_argument("--atr-stop-multiplier", type=float, default=1.5)
+    signal_validate.add_argument("--max-gap-up", type=float, default=0.05)
+    signal_validate.add_argument("--move-stop-profit", type=float, default=0.05)
+    signal_validate.add_argument("--trailing-profit", type=float, default=0.08)
+    signal_validate.add_argument("--trailing-drawdown", type=float, default=0.06)
+    signal_validate.add_argument("--max-position", type=float, default=0.25)
+    signal_validate.add_argument("--sector-top", type=int, default=100)
+    signal_validate.add_argument("--combo-top", type=int, default=100)
+    signal_validate.add_argument("--validation-start", default="", help="First signal date for batch validation, e.g. 2026-01-01.")
+    signal_validate.add_argument("--validation-end", default="", help="Last signal date for batch validation, e.g. 2026-06-30.")
+    signal_validate.add_argument("--validation-step-days", type=int, default=20, help="Calendar-day spacing between sampled signal dates.")
+    signal_validate.add_argument("--bucket-size", type=int, default=10, help="Number of stocks per attention-score bucket.")
+    add_backtest_args(signal_validate)
+    signal_validate.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    add_common_screen_args(signal_validate)
+    signal_validate.set_defaults(top=5, universe="csi300")
+
+    operation_backtest = sub.add_parser(
+        "operation-backtest",
+        help="Backtest high-potential good-timing dashboard operation plans using trigger, stop, and profit-target rules.",
+    )
+    operation_backtest.add_argument("--strategy", choices=["tech_growth"], default="tech_growth")
+    operation_backtest.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
+    operation_backtest.add_argument("--coarse-top", type=int, default=5)
+    operation_backtest.add_argument("--combo-strategy-top", type=int, default=20)
+    operation_backtest.add_argument("--min-amount", type=float, default=20000000.0)
+    operation_backtest.add_argument("--breakout-buffer", type=float, default=0.003)
+    operation_backtest.add_argument("--volume-multiplier", type=float, default=1.2)
+    operation_backtest.add_argument("--stop-pct", type=float, default=0.05)
+    operation_backtest.add_argument("--atr-stop-multiplier", type=float, default=1.5)
+    operation_backtest.add_argument("--max-gap-up", type=float, default=0.05)
+    operation_backtest.add_argument("--move-stop-profit", type=float, default=0.05)
+    operation_backtest.add_argument("--trailing-profit", type=float, default=0.08)
+    operation_backtest.add_argument("--trailing-drawdown", type=float, default=0.06)
+    operation_backtest.add_argument("--max-position", type=float, default=0.25)
+    operation_backtest.add_argument("--sector-top", type=int, default=100)
+    operation_backtest.add_argument("--combo-top", type=int, default=100)
+    add_backtest_args(operation_backtest)
+    add_operation_backtest_args(operation_backtest)
+    operation_backtest.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
+    add_common_screen_args(operation_backtest)
+    operation_backtest.set_defaults(top=5, universe="csi300")
 
     visualize = sub.add_parser("visualize", help="Generate local visual reports from the SQLite cache.")
     visualize.add_argument("--dataset", choices=["index_constituents", "coarse", "combo", "fine"], default="index_constituents")
@@ -366,6 +497,9 @@ def main() -> int:
             output.write_text(render_dashboard_html(model), encoding="utf-8")
             print(json.dumps({"output": str(output.resolve()), "stages": len(model.get("stages", []))}, ensure_ascii=False, indent=2))
             return 0
+        if args.command == "dashboard-server":
+            serve_dashboard(args)
+            return 0
         if args.command == "validate-dashboard":
             model = run_dashboard(args)
             audit = audit_dashboard_model(model, expected_latest_trade_date=getattr(args, "expected_latest_trade_date", None))
@@ -373,6 +507,38 @@ def main() -> int:
                 print(json.dumps(audit, ensure_ascii=False, indent=2))
             else:
                 print(render_health_markdown(audit))
+            return 0
+        if args.command == "signal-backtest":
+            model = run_signal_backtest(args)
+            if args.format == "json":
+                print(json.dumps(model, ensure_ascii=False, indent=2))
+            elif args.format == "csv":
+                frames = []
+                for strategy in model.get("strategies", []):
+                    frame = pd.DataFrame(strategy.get("rows", []))
+                    if not frame.empty:
+                        frame.insert(0, "strategy_title", strategy.get("title", ""))
+                        frames.append(frame)
+                result = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+                result.to_csv(sys.stdout, index=False)
+            else:
+                print(render_signal_backtest(model))
+            return 0
+        if args.command == "signal-validate":
+            model = run_signal_validation(args)
+            if args.format == "json":
+                print(json.dumps(model, ensure_ascii=False, indent=2))
+            else:
+                print(render_signal_validation(model))
+            return 0
+        if args.command == "operation-backtest":
+            model = run_operation_backtest(args)
+            if args.format == "json":
+                print(json.dumps(model, ensure_ascii=False, indent=2))
+            elif args.format == "csv":
+                pd.DataFrame(model.get("rows", [])).to_csv(sys.stdout, index=False)
+            else:
+                print(render_operation_backtest(model))
             return 0
         if args.command == "visualize":
             if args.dataset == "index_constituents":

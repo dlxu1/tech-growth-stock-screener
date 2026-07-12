@@ -19,6 +19,24 @@ def _money(value) -> str:
         return "N/A"
 
 
+def _number(value, digits: int = 1) -> str:
+    try:
+        if value is None:
+            return "N/A"
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return "N/A"
+
+
+def _percent(value) -> str:
+    try:
+        if value is None:
+            return "N/A"
+        return f"{float(value) * 100:.2f}%"
+    except Exception:
+        return "N/A"
+
+
 def _stat(label: str, value: str) -> str:
     return f"""
       <div class="metric">
@@ -172,6 +190,160 @@ def _health_html(summary: dict) -> str:
     """
 
 
+def _backtest_html(backtest: dict | None, page_summary: dict | None = None) -> str:
+    if not backtest:
+        return ""
+    strategies = backtest.get("strategies") or []
+    if not strategies:
+        return ""
+    summary = backtest.get("summary") or {}
+    page_summary = page_summary or {}
+    signal_date = summary.get("signal_date") or "N/A"
+    top = summary.get("top") or 10
+    holding_days = summary.get("holding_days") or [7, 14, 21]
+    preferred_detail_days = int(holding_days[0]) if holding_days else 7
+    matrix_date = str(page_summary.get("as_of_date") or "")
+    universe = str(page_summary.get("universe") or "")
+    universe_index_symbol = str(page_summary.get("universe_index_symbol") or "")
+    sector = str(page_summary.get("sector") or "")
+    stock_types = ",".join((page_summary.get("stock_type_filter") or {}).get("selected_types") or [])
+    return f"""
+    <section class="backtest-section">
+      <div class="section-title">
+        <h2>数据回测</h2>
+        <span class="chip">信号日 {escape(str(signal_date))}</span>
+      </div>
+      <div class="muted">按回测信号日的评分结果分别选取前三类 Top{escape(str(top))}，以下一交易日开盘买入，并按第 N 个交易日收盘计算持有收益，仅用于研究复核。</div>
+      <form class="as-of-form backtest-date-form" action="/dashboard" method="get">
+        <label for="backtestDate">回测信号日</label>
+        <input type="hidden" name="as_of_date" value="{escape(matrix_date)}">
+        <input type="hidden" name="universe" value="{escape(universe)}">
+        <input type="hidden" name="universe_index_symbol" value="{escape(universe_index_symbol)}">
+        <input type="hidden" name="sector" value="{escape(sector)}">
+        <input type="hidden" name="stock_types" value="{escape(stock_types)}">
+        <input id="backtestDate" name="backtest_date" type="date" value="{escape(str(signal_date))}" aria-label="选择回测信号日">
+        <button type="submit">重算回测</button>
+        <span class="muted">矩阵日期保持不变，仅用该信号日重跑评分并读取未来行情</span>
+      </form>
+      <div class="backtest-panel">
+        <div class="backtest-controls">
+          <div class="backtest-control-group">
+            <span class="muted">评分口径</span>
+            <div class="backtest-tabs" id="backtestStrategyTabs" role="tablist" aria-label="选择回测评分口径"></div>
+          </div>
+          <div class="backtest-control-group">
+            <span class="muted">持有期：7日明细 / 14日明细 / 21日明细</span>
+            <div class="backtest-tabs" id="backtestHorizonTabs" role="tablist" aria-label="选择回测持有期"></div>
+          </div>
+          <div class="backtest-summary-group">
+            <div class="backtest-matrix-summary" id="backtestMatrixSummary"></div>
+            <div class="backtest-summary" id="backtestSummary"></div>
+          </div>
+        </div>
+        <div class="backtest-content">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>代码</th><th>名称</th><th>评分</th><th>买入日</th><th>买入价</th><th>卖出日</th><th>卖出价</th><th>收益</th><th>状态</th></tr></thead>
+              <tbody id="backtestTableBody"></tbody>
+            </table>
+          </div>
+          <div class="backtest-chart" id="backtestChart">
+            <div class="empty">悬停表格股票查看买入到卖出区间的股价变化。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+    """
+
+
+def _operation_backtest_html(operation_backtest: dict | None) -> str:
+    if not operation_backtest:
+        return ""
+    rows = operation_backtest.get("rows") or []
+    summary = operation_backtest.get("summary") or {}
+    signal_date = summary.get("signal_date") or "N/A"
+    profit_target = summary.get("profit_target_pct", 0.05)
+    try:
+        profit_target_text = f"{float(profit_target) * 100:.0f}%"
+    except (TypeError, ValueError):
+        profit_target_text = "5%"
+    return f"""
+    <section class="operation-backtest-section">
+      <div class="section-title">
+        <h2>操作回测</h2>
+        <span class="chip">信号日 {escape(str(signal_date))}</span>
+      </div>
+      <div class="muted">按高潜力+好时机股票的操作建议模拟触发买入，并遵循 A 股 T+1：买入后下一交易日起才检查 {escape(profit_target_text)}止盈或初始止损，未退出则按截止日收盘计算。</div>
+      <div class="operation-summary" id="operationBacktestSummary"></div>
+      <div class="backtest-content">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>代码</th><th>名称</th><th>动作</th><th>买入日</th><th>买入价</th><th>卖出日</th><th>卖出价</th><th>状态</th><th>收益</th></tr></thead>
+            <tbody id="operationBacktestTableBody"></tbody>
+          </table>
+        </div>
+        <div class="operation-path" id="operationBacktestPath">
+          <div class="empty">点击或悬停交易明细查看买入、止盈、止损路径。</div>
+        </div>
+      </div>
+      <div class="muted">操作样本 {escape(str(summary.get("candidate_count", len(rows))))} 只；成功买入 {escape(str(summary.get("trade_count", 0)))} 只；仅用于规则复核。</div>
+    </section>
+    """
+
+
+def _signal_validation_html(signal_validation: dict | None, page_summary: dict | None = None) -> str:
+    if not signal_validation:
+        return ""
+    summary = signal_validation.get("summary") or {}
+    page_summary = page_summary or {}
+    holding_days = summary.get("holding_days") or [7, 14, 21]
+    if not holding_days:
+        return ""
+    signal_dates = summary.get("signal_dates") or []
+    if len(signal_dates) == 1:
+        signal_date_text = str(signal_dates[0])
+    elif len(signal_dates) > 1:
+        signal_date_text = f"{signal_dates[0]} 至 {signal_dates[-1]}"
+    else:
+        signal_date_text = "N/A"
+    matrix_date = str(page_summary.get("as_of_date") or "").strip()
+    date_scope_note = f"验证口径：以下统计来自信号日 {signal_date_text} 的完整候选样本。"
+    if matrix_date and matrix_date != signal_date_text:
+        date_scope_note = (
+            f"验证口径：以下统计来自信号日 {signal_date_text} 的完整候选样本；"
+            f"当前矩阵日为 {matrix_date}。两者不同时，象限数量不会等于当前矩阵内可见股票数。"
+        )
+    return f"""
+    <section class="validation-section">
+      <div class="section-title">
+        <h2>信号验证与预警</h2>
+        <span class="chip">信号日 {escape(signal_date_text)}</span>
+      </div>
+      <div class="muted">验证信号日评分在未来持有期里的收益、胜率和排序有效性，用于后续预警规则复核。</div>
+      <div class="validation-scope-note">{escape(date_scope_note)}</div>
+      <div class="validation-panel">
+        <div class="validation-controls">
+          <div class="backtest-control-group">
+            <span class="muted">持有期验证</span>
+            <div class="validation-tabs" id="validationHorizonTabs" role="tablist" aria-label="选择信号验证持有期"></div>
+          </div>
+        </div>
+        <div class="validation-overview" id="validationOverview"></div>
+        <div class="validation-grid">
+          <div class="validation-block">
+            <h3>矩阵象限表现</h3>
+            <div class="validation-heatmap" id="validationQuadrants"></div>
+          </div>
+          <div class="validation-block">
+            <h3>综合关注分分桶</h3>
+            <div class="validation-bucket-bars" id="validationBuckets"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+    """
+
+
 def render_dashboard_html(model: dict) -> str:
     """Render a self-contained dashboard document."""
 
@@ -183,7 +355,17 @@ def render_dashboard_html(model: dict) -> str:
     data_json = _json_script(model)
     column_labels_json = _json_script(COLUMN_LABELS)
     score_help_json = _json_script(SCORE_HELP)
-    health_html = _health_html(model.get("summary", {}))
+    summary = model.get("summary") or {}
+    health_html = _health_html(summary)
+    backtest_html = _backtest_html(model.get("backtest"), summary)
+    operation_backtest_html = _operation_backtest_html(model.get("operation_backtest"))
+    signal_validation_html = _signal_validation_html(model.get("signal_validation"), summary)
+    as_of_date = str(summary.get("as_of_date") or "")
+    backtest_date = str(summary.get("backtest_date") or "")
+    universe = str(summary.get("universe") or "")
+    universe_index_symbol = str(summary.get("universe_index_symbol") or "")
+    sector = str(summary.get("sector") or "")
+    stock_types = ",".join((summary.get("stock_type_filter") or {}).get("selected_types") or [])
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -417,6 +599,38 @@ def render_dashboard_html(model: dict) -> str:
       gap: 10px;
       align-items: center;
       margin-top: 10px;
+    }}
+    .as-of-form {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfb;
+    }}
+    .as-of-form label {{
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .as-of-form input[type="date"] {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 9px;
+      font: inherit;
+      background: var(--panel);
+      color: var(--text);
+    }}
+    .as-of-form button {{
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 7px 10px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font: inherit;
+      cursor: pointer;
     }}
     .matrix-tools input[type="search"] {{
       flex: 1;
@@ -742,6 +956,296 @@ def render_dashboard_html(model: dict) -> str:
       font-size: 13px;
     }}
     .decision-note[hidden] {{ display: none; }}
+    .backtest-section {{ margin-top: 12px; }}
+    .backtest-section h3 {{
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: 0;
+    }}
+    .backtest-panel {{
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }}
+    .backtest-controls {{
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }}
+    .backtest-control-group {{
+      display: grid;
+      gap: 6px;
+    }}
+    .backtest-tabs {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }}
+    .backtest-tab {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 10px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }}
+    .backtest-tab.active {{
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 600;
+    }}
+    .backtest-summary {{
+      color: var(--muted);
+      font-size: 13px;
+      min-width: 260px;
+      text-align: right;
+    }}
+    .backtest-summary-group {{
+      display: grid;
+      gap: 4px;
+      min-width: 280px;
+      text-align: right;
+    }}
+    .backtest-matrix-summary {{
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 600;
+    }}
+    .backtest-row-label {{
+      margin-left: 6px;
+      vertical-align: middle;
+    }}
+    .backtest-content {{
+      display: grid;
+      grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.28fr);
+      gap: 12px;
+      align-items: start;
+    }}
+    .backtest-chart {{
+      min-height: 300px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfb;
+      padding: 12px;
+    }}
+    .backtest-chart svg {{
+      width: 100%;
+      height: auto;
+      display: block;
+    }}
+    .backtest-chart-title {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }}
+    tr.backtest-row-active {{ background: #f3f7f5; }}
+    .operation-backtest-section {{ margin-top: 12px; }}
+    .operation-summary {{
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }}
+    .operation-kpi {{
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfb;
+    }}
+    .operation-kpi span {{
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .operation-kpi strong {{
+      display: block;
+      margin-top: 4px;
+      font-size: 18px;
+    }}
+    .operation-path {{
+      min-height: 260px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfb;
+      padding: 12px;
+    }}
+    .operation-path-list {{
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .operation-path-item {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--panel);
+    }}
+    tr.operation-row-active {{ background: #f3f7f5; }}
+    .validation-section {{ margin-top: 12px; }}
+    .validation-section h3 {{
+      margin: 0 0 10px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }}
+    .validation-panel {{
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }}
+    .validation-scope-note {{
+      margin-top: 10px;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfb;
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .validation-controls {{
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }}
+    .validation-tabs {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }}
+    .validation-tab {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 7px 10px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }}
+    .validation-tab.active {{
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 600;
+    }}
+    .validation-overview {{
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .validation-kpi {{
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfb;
+    }}
+    .validation-kpi strong {{
+      display: block;
+      margin-top: 4px;
+      font-size: 20px;
+      line-height: 1.1;
+    }}
+    .validation-kpi span {{
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .validation-kpi.green {{ border-color: var(--accent); background: var(--accent-soft); }}
+    .validation-kpi.warn {{ border-color: var(--warn); background: #f5ecd9; }}
+    .validation-kpi.danger {{ border-color: var(--danger); background: #f5e3e1; }}
+    .validation-grid {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+    }}
+    .validation-block {{
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfb;
+    }}
+    .validation-heatmap {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .validation-tile {{
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-left-width: 5px;
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--panel);
+    }}
+    .validation-tile.green {{ border-left-color: var(--accent); }}
+    .validation-tile.warn {{ border-left-color: var(--warn); }}
+    .validation-tile.danger {{ border-left-color: var(--danger); }}
+    .validation-tile-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 7px;
+    }}
+    .validation-tile-title {{
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .validation-tile-metrics {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      font-size: 12px;
+    }}
+    .validation-tile-metrics span {{
+      color: var(--muted);
+      display: block;
+    }}
+    .validation-bucket-bars {{
+      display: grid;
+      gap: 9px;
+    }}
+    .validation-bar-row {{
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr) 112px;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+    }}
+    .validation-bar-track {{
+      height: 10px;
+      border-radius: 999px;
+      background: var(--track);
+      overflow: hidden;
+    }}
+    .validation-bar-fill {{
+      height: 100%;
+      min-width: 4px;
+      border-radius: 999px;
+      background: var(--accent);
+    }}
+    .validation-bar-fill.negative {{ background: var(--danger); }}
+    .validation-bar-value {{
+      text-align: right;
+      color: var(--muted);
+      white-space: nowrap;
+    }}
     .stage-table-section {{ margin-top: 12px; }}
     section {{ padding: 16px; overflow: hidden; }}
     .stage-head {{
@@ -859,7 +1363,13 @@ def render_dashboard_html(model: dict) -> str:
       .detail-summary,
       .detail-summary-main,
       .detail-modules,
+      .backtest-content,
+      .operation-summary,
+      .validation-overview,
+      .validation-grid,
+      .validation-heatmap,
       .legend {{ grid-template-columns: 1fr; }}
+      .backtest-summary {{ text-align: left; }}
       .stage-grid {{ grid-template-columns: 1fr; }}
       .toolbar {{ align-items: stretch; }}
       input[type="search"] {{ width: 100%; }}
@@ -892,6 +1402,17 @@ def render_dashboard_html(model: dict) -> str:
           <span class="chip">宏观 × 技术</span>
         </div>
         <div class="muted">横轴是宏观粗筛分，纵轴是技术细筛分。右上角才是优先研究对象。</div>
+        <form class="as-of-form" action="/dashboard" method="get">
+          <label for="asOfDate">历史日期重算</label>
+          <input type="hidden" name="universe" value="{escape(universe)}">
+          <input type="hidden" name="universe_index_symbol" value="{escape(universe_index_symbol)}">
+          <input type="hidden" name="sector" value="{escape(sector)}">
+          <input type="hidden" name="stock_types" value="{escape(stock_types)}">
+          <input type="hidden" name="backtest_date" value="{escape(backtest_date)}">
+          <input id="asOfDate" name="as_of_date" type="date" value="{escape(as_of_date)}" aria-label="选择历史重算日期">
+          <button type="submit">重算矩阵</button>
+          <span class="muted">按所选日期截断日线行情并重跑完整筛选流程</span>
+        </form>
         <div class="matrix-tools">
           <input id="matrixSearch" type="search" placeholder="检索矩阵股票：代码、名称、行业、动作" aria-label="检索潜力时机矩阵股票">
           <span id="matrixMatchCount" class="matrix-count"></span>
@@ -907,6 +1428,9 @@ def render_dashboard_html(model: dict) -> str:
       </section>
       <section class="decision-panel" id="detailHost"></section>
     </div>
+    {backtest_html}
+    {operation_backtest_html}
+    {signal_validation_html}
     <section id="stageTableSection" class="stage-table-section" hidden>
       <div class="toolbar">
         <div class="tabs">{tabs}</div>
@@ -942,6 +1466,8 @@ def render_dashboard_html(model: dict) -> str:
     const planNumberColumns = ["technical_score","latest_close","planned_entry","initial_stop","take_profit_1r","take_profit_2r"];
     const macroPotentialThreshold = 80;
     const technicalTimingThreshold = 75;
+    const validationMinCompleteSamples = 5;
+    const validationMinSignalDatesForFailure = 3;
     const data = window.DASHBOARD_DATA;
     const stageFunnel = document.getElementById("stageFunnel");
     const potentialMatrix = document.getElementById("potentialMatrix");
@@ -955,10 +1481,28 @@ def render_dashboard_html(model: dict) -> str:
     const stageTitle = document.getElementById("stageTitle");
     const visibleCount = document.getElementById("visibleCount");
     const scoreTooltip = document.getElementById("scoreTooltip");
+    const backtestStrategyTabs = document.getElementById("backtestStrategyTabs");
+    const backtestHorizonTabs = document.getElementById("backtestHorizonTabs");
+    const backtestMatrixSummary = document.getElementById("backtestMatrixSummary");
+    const backtestSummary = document.getElementById("backtestSummary");
+    const backtestTableBody = document.getElementById("backtestTableBody");
+    const backtestChart = document.getElementById("backtestChart");
+    const operationBacktestSummary = document.getElementById("operationBacktestSummary");
+    const operationBacktestTableBody = document.getElementById("operationBacktestTableBody");
+    const operationBacktestPath = document.getElementById("operationBacktestPath");
+    const validationHorizonTabs = document.getElementById("validationHorizonTabs");
+    const validationOverview = document.getElementById("validationOverview");
+    const validationQuadrants = document.getElementById("validationQuadrants");
+    const validationBuckets = document.getElementById("validationBuckets");
     let activeStage = data.stages[0]?.key || "";
     let sortState = {{ column: "", dir: 1 }};
     let selectedCandidateCode = "";
     let activeStockType = "全部";
+    let activeBacktestStrategy = data.backtest?.strategies?.[0]?.key || "";
+    let activeBacktestHorizon = data.backtest?.summary?.holding_days?.[0] || 7;
+    let activeValidationHorizon = data.signal_validation?.summary?.holding_days?.[0] || 7;
+    let activeBacktestRows = [];
+    let activeOperationRows = data.operation_backtest?.rows || [];
 
     function text(value) {{
       if (value === null || value === undefined || value === "") return "N/A";
@@ -1689,7 +2233,525 @@ def render_dashboard_html(model: dict) -> str:
       traceHost.innerHTML = `<h2>${{escapeHtml(name)}} 的阶段轨迹</h2>${{html}}`;
     }}
 
-    document.querySelectorAll(".tab").forEach((btn) => {{
+    function backtestStrategy() {{
+      return (data.backtest?.strategies || []).find((item) => item.key === activeBacktestStrategy) || data.backtest?.strategies?.[0] || null;
+    }}
+
+    function backtestHorizonSummary(strategy, horizon) {{
+      return strategy?.horizons?.[horizon] || strategy?.horizons?.[String(horizon)] || {{}};
+    }}
+
+    function backtestStatusLabel(status) {{
+      if (status === "complete") return "完整";
+      if (status === "missing_future_quotes") return "缺未来行情";
+      if (status === "insufficient_future_quotes") return "样本不足";
+      return text(status);
+    }}
+
+    function matrixCandidateByCode(code) {{
+      const key = text(code || "").padStart(6, "0");
+      return buildCandidateModels().find((item) => item.code === key) || null;
+    }}
+
+    function isHighPotentialGoodTiming(row) {{
+      if (row?.is_high_potential_good_timing === true) return true;
+      if (row?.matrix_label === "好时机+高潜力") return true;
+      const macro = numberValue(row?.macro_score);
+      const technical = numberValue(row?.technical_score);
+      if (macro !== null && technical !== null) return macro >= macroPotentialThreshold && technical >= technicalTimingThreshold;
+      const candidate = matrixCandidateByCode(row?.code);
+      return candidate?.priority?.label === "高潜力 + 好时机";
+    }}
+
+    function renderBacktestMatrixLabel(row) {{
+      if (!isHighPotentialGoodTiming(row)) return "";
+      const macro = numberValue(row?.macro_score);
+      const technical = numberValue(row?.technical_score);
+      const title = macro !== null && technical !== null
+        ? `宏观 ${{macro.toFixed(1)}}，技术 ${{technical.toFixed(1)}}`
+        : "落在好时机+高潜力矩阵";
+      return `<span class="backtest-row-label chip green" title="${{escapeHtml(title)}}">好时机+高潜力</span>`;
+    }}
+
+    function average(values) {{
+      if (!values.length) return null;
+      return values.reduce((sum, value) => sum + value, 0) / values.length;
+    }}
+
+    function renderBacktestMatrixSummary(horizon) {{
+      if (!backtestMatrixSummary) return;
+      const matrixRows = activeBacktestRows.filter(isHighPotentialGoodTiming);
+      const returns = matrixRows
+        .map((row) => numberValue(row.return_pct))
+        .filter((value) => value !== null);
+      if (!matrixRows.length) {{
+        backtestMatrixSummary.textContent = `${{horizon}}日好时机+高潜力：暂无命中样本`;
+        return;
+      }}
+      const avgReturn = average(returns);
+      const winRate = returns.length ? returns.filter((value) => value > 0).length / returns.length : null;
+      backtestMatrixSummary.textContent = `${{horizon}}日好时机+高潜力：完整样本 ${{returns.length}}/${{matrixRows.length}}，拼股收益 ${{formatBacktestReturn(avgReturn)}}，胜率 ${{formatBacktestReturn(winRate)}}`;
+    }}
+
+    function renderBacktestTabs() {{
+      if (!backtestStrategyTabs || !backtestHorizonTabs || !data.backtest) return;
+      const strategies = data.backtest.strategies || [];
+      if (!activeBacktestStrategy && strategies.length) activeBacktestStrategy = strategies[0].key;
+      backtestStrategyTabs.innerHTML = strategies.map((strategy) => `
+        <button type="button" class="backtest-tab${{strategy.key === activeBacktestStrategy ? " active" : ""}}" data-bt-strategy="${{escapeHtml(strategy.key)}}">${{escapeHtml(strategy.title || strategy.key)}} <span>${{Number(strategy.selected_count || 0)}}只</span></button>
+      `).join("");
+      const horizons = data.backtest.summary?.holding_days || [7, 14, 21];
+      if (!horizons.includes(Number(activeBacktestHorizon))) activeBacktestHorizon = horizons[0] || 7;
+      backtestHorizonTabs.innerHTML = horizons.map((horizon) => `
+        <button type="button" class="backtest-tab${{Number(horizon) === Number(activeBacktestHorizon) ? " active" : ""}}" data-backtest-horizon="${{Number(horizon)}}">${{Number(horizon)}}日明细</button>
+      `).join("");
+    }}
+
+    function formatBacktestReturn(value) {{
+      const number = numberValue(value);
+      return number === null ? "N/A" : `${{(number * 100).toFixed(2)}}%`;
+    }}
+
+    function formatBacktestPrice(value) {{
+      const number = numberValue(value);
+      return number === null ? "N/A" : number.toFixed(2);
+    }}
+
+    function renderBacktestTable() {{
+      if (!backtestTableBody || !data.backtest) return;
+      const strategy = backtestStrategy();
+      const horizon = Number(activeBacktestHorizon);
+      activeBacktestRows = (strategy?.rows || []).filter((row) => Number(row.holding_days) === horizon);
+      const summary = backtestHorizonSummary(strategy, horizon);
+      renderBacktestMatrixSummary(horizon);
+      if (backtestSummary) {{
+        backtestSummary.textContent = `${{horizon}}日：完整样本 ${{summary.complete_count || 0}}/${{summary.rows || activeBacktestRows.length}}，平均收益 ${{formatBacktestReturn(summary.avg_return_pct)}}，胜率 ${{formatBacktestReturn(summary.win_rate)}}`;
+      }}
+      if (!activeBacktestRows.length) {{
+        backtestTableBody.innerHTML = '<tr><td colspan="9" class="empty">暂无该持有期明细。</td></tr>';
+        renderBacktestChart(null);
+        return;
+      }}
+      backtestTableBody.innerHTML = activeBacktestRows.map((row, index) => `
+        <tr data-backtest-row="${{index}}">
+          <td class="mono">${{escapeHtml(row.code)}}</td>
+          <td>${{escapeHtml(row.name)}}${{renderBacktestMatrixLabel(row)}}</td>
+          <td>${{escapeHtml(scoreText(row.score))}}</td>
+          <td>${{escapeHtml(row.buy_date || "N/A")}}</td>
+          <td>${{escapeHtml(formatBacktestPrice(row.buy_price))}}</td>
+          <td>${{escapeHtml(row.sell_date || "N/A")}}</td>
+          <td>${{escapeHtml(formatBacktestPrice(row.sell_price))}}</td>
+          <td>${{escapeHtml(formatBacktestReturn(row.return_pct))}}</td>
+          <td><span class="chip">${{escapeHtml(backtestStatusLabel(row.data_status))}}</span></td>
+        </tr>
+      `).join("");
+      renderBacktestChart(activeBacktestRows.find((row) => row.data_status === "complete") || activeBacktestRows[0]);
+    }}
+
+    function renderBacktestChart(row) {{
+      if (!backtestChart) return;
+      if (!row || !Array.isArray(row.price_points) || !row.price_points.length) {{
+        backtestChart.innerHTML = '<div class="empty">该股票暂无可绘制的完整价格序列。</div>';
+        return;
+      }}
+      const points = row.price_points
+        .map((item) => ({{ trade_date: text(item.trade_date), close: numberValue(item.close) }}))
+        .filter((item) => item.close !== null);
+      if (!points.length) {{
+        backtestChart.innerHTML = '<div class="empty">该股票暂无可绘制的完整价格序列。</div>';
+        return;
+      }}
+      const width = 640;
+      const height = 260;
+      const pad = {{ left: 44, right: 22, top: 22, bottom: 34 }};
+      const closes = points.map((item) => item.close);
+      const minClose = Math.min(...closes);
+      const maxClose = Math.max(...closes);
+      const spread = maxClose - minClose || Math.max(maxClose * 0.02, 1);
+      const xFor = (index) => pad.left + (points.length === 1 ? 0 : index / (points.length - 1)) * (width - pad.left - pad.right);
+      const yFor = (close) => pad.top + (maxClose - close) / spread * (height - pad.top - pad.bottom);
+      const path = points.map((item, index) => `${{index === 0 ? "M" : "L"}}${{xFor(index).toFixed(1)}} ${{yFor(item.close).toFixed(1)}}`).join(" ");
+      const buyIndex = points.findIndex((item) => item.trade_date === row.buy_date);
+      const sellIndex = points.findIndex((item) => item.trade_date === row.sell_date);
+      const marker = (index, label, color) => {{
+        if (index < 0) return "";
+        const point = points[index];
+        const x = xFor(index);
+        const y = yFor(point.close);
+        return `<g><line x1="${{x.toFixed(1)}}" y1="${{pad.top}}" x2="${{x.toFixed(1)}}" y2="${{height - pad.bottom}}" stroke="${{color}}" stroke-dasharray="4 4"/><circle cx="${{x.toFixed(1)}}" cy="${{y.toFixed(1)}}" r="4.5" fill="${{color}}"/><text x="${{x.toFixed(1)}}" y="${{Math.max(14, y - 8).toFixed(1)}}" text-anchor="middle" fill="${{color}}" font-size="12">${{label}}</text></g>`;
+      }};
+      const first = points[0];
+      const last = points[points.length - 1];
+      backtestChart.innerHTML = `
+        <div class="backtest-chart-title">
+          <strong>${{escapeHtml(row.name)}} <span class="mono">${{escapeHtml(row.code)}}</span></strong>
+          <span>${{escapeHtml(row.buy_date)}} -> ${{escapeHtml(row.sell_date)}}，收益 ${{escapeHtml(formatBacktestReturn(row.return_pct))}}</span>
+        </div>
+        <svg viewBox="0 0 ${{width}} ${{height}}" role="img" aria-label="${{escapeHtml(row.name)}} 回测区间股价变化">
+          <rect x="0" y="0" width="${{width}}" height="${{height}}" fill="#fbfcfb"/>
+          <line x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#d9e0e6"/>
+          <line x1="${{pad.left}}" y1="${{height - pad.bottom}}" x2="${{width - pad.right}}" y2="${{height - pad.bottom}}" stroke="#d9e0e6"/>
+          <text x="${{pad.left - 8}}" y="${{pad.top + 4}}" text-anchor="end" fill="#667284" font-size="12">${{maxClose.toFixed(2)}}</text>
+          <text x="${{pad.left - 8}}" y="${{height - pad.bottom}}" text-anchor="end" fill="#667284" font-size="12">${{minClose.toFixed(2)}}</text>
+          <path d="${{path}}" fill="none" stroke="#247c6d" stroke-width="2.5"/>
+          ${{marker(buyIndex, "买入", "#315f9f")}}
+          ${{marker(sellIndex, "卖出", "#b94a48")}}
+          <text x="${{pad.left}}" y="${{height - 10}}" fill="#667284" font-size="12">${{escapeHtml(first.trade_date)}}</text>
+          <text x="${{width - pad.right}}" y="${{height - 10}}" text-anchor="end" fill="#667284" font-size="12">${{escapeHtml(last.trade_date)}}</text>
+        </svg>
+      `;
+    }}
+
+    function renderBacktestPanel() {{
+      if (!data.backtest) return;
+      renderBacktestTabs();
+      renderBacktestTable();
+    }}
+
+    function operationStatusLabel(status) {{
+      const labels = {{
+        take_profit: "已止盈",
+        stop_loss: "已止损",
+        hold_to_end: "持有至截止日",
+        not_triggered: "未触发",
+        missing_future_quotes: "缺未来行情",
+        invalid_plan: "计划无效",
+      }};
+      return labels[status] || text(status);
+    }}
+
+    function renderOperationBacktestSummary() {{
+      if (!operationBacktestSummary || !data.operation_backtest) return;
+      const summary = data.operation_backtest.summary || {{}};
+      const items = [
+        ["操作样本", summary.candidate_count || 0],
+        ["成功买入", summary.trade_count || 0],
+        ["未触发", summary.untriggered_count || 0],
+        ["已止盈", summary.take_profit_count || 0],
+        ["已止损", summary.stop_loss_count || 0],
+        ["仍持有", summary.hold_count || 0],
+        ["实际成交胜率", formatBacktestReturn(summary.win_rate)],
+        ["平均已实现收益", formatBacktestReturn(summary.realized_avg_return_pct)],
+        ["平均含浮动收益", formatBacktestReturn(summary.total_avg_return_pct)],
+      ];
+      operationBacktestSummary.innerHTML = items.map(([label, value]) => `
+        <div class="operation-kpi"><span>${{escapeHtml(label)}}</span><strong>${{escapeHtml(value)}}</strong></div>
+      `).join("");
+    }}
+
+    function renderOperationBacktestTable() {{
+      if (!operationBacktestTableBody || !data.operation_backtest) return;
+      activeOperationRows = data.operation_backtest.rows || [];
+      if (!activeOperationRows.length) {{
+        operationBacktestTableBody.innerHTML = '<tr><td colspan="9" class="empty">暂无可回测的操作样本。</td></tr>';
+        renderOperationBacktestPath(null);
+        return;
+      }}
+      operationBacktestTableBody.innerHTML = activeOperationRows.map((row, index) => `
+        <tr tabindex="0" data-operation-row="${{index}}">
+          <td class="mono">${{escapeHtml(row.code)}}</td>
+          <td>${{escapeHtml(row.name)}}</td>
+          <td>${{escapeHtml(row.action)}}</td>
+          <td>${{escapeHtml(row.buy_date || "N/A")}}</td>
+          <td>${{escapeHtml(formatBacktestPrice(row.buy_price))}}</td>
+          <td>${{escapeHtml(row.sell_date || "N/A")}}</td>
+          <td>${{escapeHtml(formatBacktestPrice(row.sell_price))}}</td>
+          <td><span class="chip">${{escapeHtml(operationStatusLabel(row.status))}}</span></td>
+          <td>${{escapeHtml(formatBacktestReturn(row.return_pct))}}</td>
+        </tr>
+      `).join("");
+      renderOperationBacktestPath(activeOperationRows[0]);
+    }}
+
+    function renderOperationBacktestPath(row) {{
+      if (!operationBacktestPath) return;
+      if (!row) {{
+        operationBacktestPath.innerHTML = '<div class="empty">暂无可展示的操作路径。</div>';
+        return;
+      }}
+      const path = Array.isArray(row.path) ? row.path : [];
+      const pathItems = path.length ? path.map((item) => `
+        <div class="operation-path-item">
+          <span>${{escapeHtml(item.trade_date)}} ${{item.event === "buy" ? "触发买入" : "持有观察"}}</span>
+          <strong>高 ${{escapeHtml(formatBacktestPrice(item.high))}} / 低 ${{escapeHtml(formatBacktestPrice(item.low))}} / 收 ${{escapeHtml(formatBacktestPrice(item.close))}}</strong>
+        </div>
+      `).join("") : '<div class="empty">该股票未触发买入或缺少路径数据。</div>';
+      operationBacktestPath.innerHTML = `
+        <div class="backtest-chart-title">
+          <strong>${{escapeHtml(row.name)}} <span class="mono">${{escapeHtml(row.code)}}</span></strong>
+          <span>${{escapeHtml(operationStatusLabel(row.status))}}，收益 ${{escapeHtml(formatBacktestReturn(row.return_pct))}}</span>
+        </div>
+        <div class="operation-path-list">
+          <div class="operation-path-item"><span>计划入场</span><strong>${{escapeHtml(formatBacktestPrice(row.planned_entry))}}</strong></div>
+          <div class="operation-path-item"><span>初始止损</span><strong>${{escapeHtml(formatBacktestPrice(row.initial_stop))}}</strong></div>
+          <div class="operation-path-item"><span>5%止盈价</span><strong>${{escapeHtml(formatBacktestPrice(row.profit_target_price))}}</strong></div>
+          ${{pathItems}}
+        </div>
+      `;
+    }}
+
+    function renderOperationBacktestPanel() {{
+      if (!data.operation_backtest) return;
+      renderOperationBacktestSummary();
+      renderOperationBacktestTable();
+    }}
+
+    function validationHorizonSummary(group, horizon) {{
+      return group?.[horizon] || group?.[String(horizon)] || {{}};
+    }}
+
+    function validationStat(collection, name, horizon) {{
+      return validationHorizonSummary(collection?.[name], horizon);
+    }}
+
+    function validationCompleteCount(stats) {{
+      const count = Number(stats?.complete_count || 0);
+      return Number.isFinite(count) ? count : 0;
+    }}
+
+    function validationHasEnoughSamples(stats) {{
+      return validationCompleteCount(stats) >= validationMinCompleteSamples;
+    }}
+
+    function validationSignalDateCount() {{
+      const summary = data.signal_validation?.summary || {{}};
+      const summaryCount = Number(summary.signal_date_count || 0);
+      const dateCount = Array.isArray(summary.signal_dates) ? summary.signal_dates.length : 0;
+      const count = Math.max(summaryCount, dateCount);
+      return Number.isFinite(count) ? count : 0;
+    }}
+
+    function validationCanTriggerFailure() {{
+      return validationSignalDateCount() >= validationMinSignalDatesForFailure;
+    }}
+
+    function validationTone(stats, peerStats = null) {{
+      const avg = numberValue(stats?.avg_return_pct);
+      const winRate = numberValue(stats?.win_rate);
+      const peerAvg = numberValue(peerStats?.avg_return_pct);
+      if (!validationHasEnoughSamples(stats)) return "warn";
+      if (avg === null && winRate === null) return "danger";
+      if ((winRate !== null && winRate < 0.5) || (peerAvg !== null && avg !== null && avg <= peerAvg)) return "danger";
+      if ((winRate !== null && winRate < 0.6) || (peerAvg !== null && avg !== null && avg - peerAvg < 0.02)) return "warn";
+      return "green";
+    }}
+
+    function validationAlert(goodStats, otherStats) {{
+      const completeCount = validationCompleteCount(goodStats);
+      const avg = numberValue(goodStats?.avg_return_pct);
+      const otherAvg = numberValue(otherStats?.avg_return_pct);
+      const winRate = numberValue(goodStats?.win_rate);
+      const excess = avg !== null && otherAvg !== null ? avg - otherAvg : null;
+      if (!validationHasEnoughSamples(goodStats)) {{
+        return {{
+          tone: "warn",
+          label: "象限失效预警",
+          value: "样本不足",
+          detail: `完整样本 ${{completeCount}} 只，低于 ${{validationMinCompleteSamples}} 只，暂不判定失效`,
+        }};
+      }}
+      const tone = validationTone(goodStats, otherStats);
+      if (tone === "green") {{
+        return {{
+          tone,
+          label: "象限失效预警",
+          value: "稳定",
+          detail: `胜率 ${{formatBacktestReturn(winRate)}}，相对其他象限 ${{formatBacktestReturn(excess)}}`,
+        }};
+      }}
+      if (tone === "warn") {{
+        return {{
+          tone,
+          label: "象限失效预警",
+          value: "观察",
+          detail: `胜率 ${{formatBacktestReturn(winRate)}}，相对其他象限 ${{formatBacktestReturn(excess)}}`,
+        }};
+      }}
+      if (!validationCanTriggerFailure()) {{
+        return {{
+          tone: "warn",
+          label: "象限失效预警",
+          value: "单日观察",
+          detail: `信号日少于 ${{validationMinSignalDatesForFailure}} 个，先按观察处理；胜率 ${{formatBacktestReturn(winRate)}}，相对其他象限 ${{formatBacktestReturn(excess)}}`,
+        }};
+      }}
+      return {{
+        tone,
+        label: "象限失效预警",
+        value: "触发",
+        detail: `胜率 ${{formatBacktestReturn(winRate)}}，相对其他象限 ${{formatBacktestReturn(excess)}}`,
+      }};
+    }}
+
+    function validationBucketStat(name, horizon) {{
+      return validationStat(data.signal_validation?.attention_buckets || {{}}, name, horizon);
+    }}
+
+    function validationRankingAlert(horizon) {{
+      const top10 = validationBucketStat("Top 1-10", horizon);
+      const top20 = validationBucketStat("Top 11-20", horizon);
+      const top10Avg = numberValue(top10.avg_return_pct);
+      const top20Avg = numberValue(top20.avg_return_pct);
+      const diff = top10Avg !== null && top20Avg !== null ? top10Avg - top20Avg : null;
+      if (!validationHasEnoughSamples(top10) || !validationHasEnoughSamples(top20)) {{
+        return {{
+          tone: "warn",
+          label: "排序有效性预警",
+          value: "样本不足",
+          detail: `Top 分桶完整样本低于 ${{validationMinCompleteSamples}} 只，暂不判定排序失效`,
+        }};
+      }}
+      if (diff !== null && diff >= 0) {{
+        return {{
+          tone: "green",
+          label: "排序有效性预警",
+          value: "稳定",
+          detail: `Top 1-10 跑赢 Top 11-20，差额 ${{formatBacktestReturn(diff)}}`,
+        }};
+      }}
+      if (!validationCanTriggerFailure()) {{
+        return {{
+          tone: "warn",
+          label: "排序有效性预警",
+          value: "单日观察",
+          detail: `信号日少于 ${{validationMinSignalDatesForFailure}} 个，Top 1-10 未跑赢 Top 11-20，差额 ${{formatBacktestReturn(diff)}}`,
+        }};
+      }}
+      return {{
+        tone: "danger",
+        label: "排序有效性预警",
+        value: "触发",
+        detail: `Top 1-10 未跑赢 Top 11-20，差额 ${{formatBacktestReturn(diff)}}`,
+      }};
+    }}
+
+    function renderValidationTabs() {{
+      if (!validationHorizonTabs || !data.signal_validation) return;
+      const horizons = data.signal_validation.summary?.holding_days || [7, 14, 21];
+      if (!horizons.includes(Number(activeValidationHorizon))) activeValidationHorizon = horizons[0] || 7;
+      validationHorizonTabs.innerHTML = horizons.map((horizon) => `
+        <button type="button" class="validation-tab${{Number(horizon) === Number(activeValidationHorizon) ? " active" : ""}}" data-validation-horizon="${{Number(horizon)}}">${{Number(horizon)}}日</button>
+      `).join("");
+    }}
+
+    function renderValidationOverview(horizon) {{
+      if (!validationOverview || !data.signal_validation) return;
+      const quadrants = data.signal_validation.quadrants || {{}};
+      const goodStats = validationStat(quadrants, "好时机+高潜力", horizon);
+      const otherStats = validationStat(quadrants, "其他象限", horizon);
+      const alert = validationAlert(goodStats, otherStats);
+      const rankingAlert = validationRankingAlert(horizon);
+      const avg = numberValue(goodStats.avg_return_pct);
+      const otherAvg = numberValue(otherStats.avg_return_pct);
+      const excess = avg !== null && otherAvg !== null ? avg - otherAvg : null;
+      const summary = data.signal_validation.summary || {{}};
+      validationOverview.innerHTML = `
+        <div class="validation-kpi">
+          <span>验证样本</span>
+          <strong>${{escapeHtml(summary.candidate_count || 0)}}</strong>
+          <span>${{escapeHtml((summary.signal_dates || []).join("、") || "N/A")}}</span>
+        </div>
+        <div class="validation-kpi">
+          <span>好时机+高潜力平均收益</span>
+          <strong>${{escapeHtml(formatBacktestReturn(goodStats.avg_return_pct))}}</strong>
+          <span>完整样本 ${{escapeHtml(goodStats.complete_count || 0)}} 只</span>
+        </div>
+        <div class="validation-kpi">
+          <span>相对其他象限超额</span>
+          <strong>${{escapeHtml(formatBacktestReturn(excess))}}</strong>
+          <span>其他象限 ${{escapeHtml(formatBacktestReturn(otherStats.avg_return_pct))}}</span>
+        </div>
+        <div class="validation-kpi ${{alert.tone}}">
+          <span>${{escapeHtml(alert.label)}}</span>
+          <strong>${{escapeHtml(alert.value)}}</strong>
+          <span>${{escapeHtml(alert.detail)}}</span>
+        </div>
+        <div class="validation-kpi ${{rankingAlert.tone}}">
+          <span>${{escapeHtml(rankingAlert.label)}}</span>
+          <strong>${{escapeHtml(rankingAlert.value)}}</strong>
+          <span>${{escapeHtml(rankingAlert.detail)}}</span>
+        </div>
+      `;
+    }}
+
+        function quadrantOrder(name) {{
+          const order = ["好时机+高潜力", "高潜力+等时机", "好时机+低潜力", "其他象限"];
+          const index = order.indexOf(name);
+          return index >= 0 ? index : order.length;
+        }}
+
+        function renderValidationQuadrants(horizon) {{
+          if (!validationQuadrants || !data.signal_validation) return;
+          const quadrants = data.signal_validation.quadrants || {{}};
+          const otherStats = validationStat(quadrants, "其他象限", horizon);
+          const entries = Object.entries(quadrants).sort(([a], [b]) => quadrantOrder(a) - quadrantOrder(b) || a.localeCompare(b, "zh-Hans-CN"));
+          if (!entries.length) {{
+            validationQuadrants.innerHTML = '<div class="empty">暂无象限验证数据。</div>';
+            return;
+          }}
+          validationQuadrants.innerHTML = entries.map(([name, group]) => {{
+            const stats = validationHorizonSummary(group, horizon);
+            const tone = validationTone(stats, name === "其他象限" ? null : otherStats);
+            return `
+              <div class="validation-tile ${{tone}}">
+                <div class="validation-tile-head">
+                  <div class="validation-tile-title" title="${{escapeHtml(name)}}">${{escapeHtml(name)}}</div>
+                  <span class="chip ${{tone}}">${{escapeHtml(stats.complete_count || 0)}}只</span>
+                </div>
+                <div class="validation-tile-metrics">
+                  <div><span>平均收益</span><strong>${{escapeHtml(formatBacktestReturn(stats.avg_return_pct))}}</strong></div>
+                  <div><span>胜率</span><strong>${{escapeHtml(formatBacktestReturn(stats.win_rate))}}</strong></div>
+                  <div><span>中位收益</span><strong>${{escapeHtml(formatBacktestReturn(stats.median_return_pct))}}</strong></div>
+                </div>
+              </div>
+            `;
+          }}).join("");
+        }}
+
+        function bucketOrder(label) {{
+          const match = text(label).match(/Top\\s+(\\d+)/i);
+          return match ? Number(match[1]) : 9999;
+        }}
+
+        function renderValidationBuckets(horizon) {{
+          if (!validationBuckets || !data.signal_validation) return;
+          const buckets = data.signal_validation.attention_buckets || {{}};
+          const entries = Object.entries(buckets).sort(([a], [b]) => bucketOrder(a) - bucketOrder(b) || a.localeCompare(b, "zh-Hans-CN"));
+          if (!entries.length) {{
+            validationBuckets.innerHTML = '<div class="empty">暂无综合关注分分桶数据。</div>';
+            return;
+          }}
+          const returns = entries
+            .map(([, group]) => numberValue(validationHorizonSummary(group, horizon).avg_return_pct))
+            .filter((value) => value !== null);
+          const maxAbs = Math.max(0.01, ...returns.map((value) => Math.abs(value)));
+          validationBuckets.innerHTML = entries.map(([label, group]) => {{
+            const stats = validationHorizonSummary(group, horizon);
+            const avg = numberValue(stats.avg_return_pct);
+            const width = avg === null ? 0 : Math.max(4, Math.min(100, Math.abs(avg) / maxAbs * 100));
+            const negative = avg !== null && avg < 0;
+            return `
+              <div class="validation-bar-row">
+                <strong>${{escapeHtml(label)}}</strong>
+                <div class="validation-bar-track" title="平均收益 ${{escapeHtml(formatBacktestReturn(avg))}}">
+                  <div class="validation-bar-fill${{negative ? " negative" : ""}}" style="width: ${{width.toFixed(1)}}%"></div>
+                </div>
+                <div class="validation-bar-value">${{escapeHtml(formatBacktestReturn(stats.avg_return_pct))}} / ${{escapeHtml(formatBacktestReturn(stats.win_rate))}}</div>
+              </div>
+            `;
+          }}).join("");
+        }}
+
+        function renderSignalValidationPanel() {{
+          if (!data.signal_validation) return;
+          const horizon = Number(activeValidationHorizon);
+          renderValidationTabs();
+          renderValidationOverview(horizon);
+          renderValidationQuadrants(horizon);
+          renderValidationBuckets(horizon);
+        }}
+
+        document.querySelectorAll(".tab").forEach((btn) => {{
       btn.addEventListener("click", () => {{
         document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
         btn.classList.add("active");
@@ -1716,6 +2778,48 @@ def render_dashboard_html(model: dict) -> str:
       renderStockTypeFilters();
       renderPotentialTiming();
       renderCandidateDetail();
+    }});
+    backtestStrategyTabs?.addEventListener("click", (event) => {{
+      const button = event.target.closest("[data-bt-strategy]");
+      if (!button) return;
+      activeBacktestStrategy = button.dataset.btStrategy;
+      renderBacktestPanel();
+    }});
+        backtestHorizonTabs?.addEventListener("click", (event) => {{
+          const button = event.target.closest("[data-backtest-horizon]");
+          if (!button) return;
+          activeBacktestHorizon = Number(button.dataset.backtestHorizon);
+          renderBacktestPanel();
+        }});
+        validationHorizonTabs?.addEventListener("click", (event) => {{
+          const button = event.target.closest("[data-validation-horizon]");
+          if (!button) return;
+          activeValidationHorizon = Number(button.dataset.validationHorizon);
+          renderSignalValidationPanel();
+        }});
+        backtestTableBody?.addEventListener("mouseover", (event) => {{
+      const row = event.target.closest("[data-backtest-row]");
+      if (!row) return;
+      backtestTableBody.querySelectorAll("tr").forEach((item) => item.classList.remove("backtest-row-active"));
+      row.classList.add("backtest-row-active");
+      renderBacktestChart(activeBacktestRows[Number(row.dataset.backtestRow)]);
+    }});
+        backtestTableBody?.addEventListener("focusin", (event) => {{
+      const row = event.target.closest("[data-backtest-row]");
+      if (!row) return;
+      renderBacktestChart(activeBacktestRows[Number(row.dataset.backtestRow)]);
+    }});
+    operationBacktestTableBody?.addEventListener("mouseover", (event) => {{
+      const row = event.target.closest("[data-operation-row]");
+      if (!row) return;
+      operationBacktestTableBody.querySelectorAll("tr").forEach((item) => item.classList.remove("operation-row-active"));
+      row.classList.add("operation-row-active");
+      renderOperationBacktestPath(activeOperationRows[Number(row.dataset.operationRow)]);
+    }});
+    operationBacktestTableBody?.addEventListener("focusin", (event) => {{
+      const row = event.target.closest("[data-operation-row]");
+      if (!row) return;
+      renderOperationBacktestPath(activeOperationRows[Number(row.dataset.operationRow)]);
     }});
     search.addEventListener("input", renderStage);
     tableHost.addEventListener("mouseover", (event) => {{
@@ -1752,8 +2856,11 @@ def render_dashboard_html(model: dict) -> str:
       if (tr) renderTrace(tr.dataset.code);
     }});
 
-    renderPotentialTimingDashboard();
-    renderStage();
+        renderPotentialTimingDashboard();
+        renderBacktestPanel();
+        renderOperationBacktestPanel();
+        renderSignalValidationPanel();
+        renderStage();
   </script>
 </body>
 </html>

@@ -14,8 +14,8 @@ from infra.cache import read_index_constituents
 from strategies.tech_growth import build_tech_universe
 
 
-def build_index_universe(index_symbol: str, spot: pd.DataFrame, financials: pd.DataFrame) -> pd.DataFrame:
-    members = read_index_constituents(index_symbol)
+def build_index_universe(index_symbol: str, spot: pd.DataFrame, financials: pd.DataFrame, as_of_date: str | None = None) -> pd.DataFrame:
+    members = read_index_constituents(index_symbol, constituent_date="latest", as_of_date=as_of_date)
     if members.empty:
         raise RuntimeError(f"No cached index constituents for {index_symbol}. Run sync --dataset index_constituents first.")
     index_cols = ["code", "name", "index_name", "constituent_date", "weight"]
@@ -40,13 +40,14 @@ def build_index_universe(index_symbol: str, spot: pd.DataFrame, financials: pd.D
 
 
 def fetch_coarse_source_bundle(args) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
-    report_raw, report_date, financial_source = load_financial_report(args.report_date, args.refresh, args.source, args.no_proxy)
+    as_of_date = getattr(args, "as_of_date", None) or None
+    report_raw, report_date, financial_source = load_financial_report(args.report_date, args.refresh, args.source, args.no_proxy, as_of_date=as_of_date)
     financials = normalize_financials(report_raw)
     spot, spot_source = load_spot(args.refresh, args.no_proxy, args.source)
     universe_name = getattr(args, "universe", "tech")
     if universe_name == "csi300":
         index_symbol = getattr(args, "universe_index_symbol", "000300")
-        universe = build_index_universe(index_symbol, spot, financials)
+        universe = build_index_universe(index_symbol, spot, financials, as_of_date=as_of_date)
         universe_source = f"index_constituents:{index_symbol}"
         quote_source = spot_source
         tech_board_count = universe["board_name"].nunique()

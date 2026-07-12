@@ -15,7 +15,7 @@ def database_path() -> Path:
     return db_path()
 
 
-def read_quotes_daily(codes: list[str], columns: list[str] | None = None) -> pd.DataFrame:
+def read_quotes_daily(codes: list[str], columns: list[str] | None = None, as_of_date: str | None = None) -> pd.DataFrame:
     base_columns = ["code", "trade_date", "open", "high", "low", "close", "volume", "amount", "source", "updated_at"]
     selected = columns or base_columns
     if not codes:
@@ -24,6 +24,8 @@ def read_quotes_daily(codes: list[str], columns: list[str] | None = None) -> pd.
     if not normalized_codes:
         return pd.DataFrame(columns=selected)
     placeholders = ",".join("?" for _ in normalized_codes)
+    date_filter = " and trade_date<=?" if as_of_date else ""
+    params = [*normalized_codes, as_of_date] if as_of_date else normalized_codes
     safe_columns = ", ".join(selected)
     conn = sqlite3.connect(db_path())
     try:
@@ -32,10 +34,11 @@ def read_quotes_daily(codes: list[str], columns: list[str] | None = None) -> pd.
             select {safe_columns}
             from quotes_daily
             where code in ({placeholders})
+            {date_filter}
             order by code, trade_date, updated_at
             """,
             conn,
-            params=normalized_codes,
+            params=params,
         )
     except Exception:
         return pd.DataFrame(columns=selected)
@@ -49,8 +52,8 @@ def read_quotes_daily(codes: list[str], columns: list[str] | None = None) -> pd.
     return prices.drop_duplicates(["code", "trade_date"], keep="last")
 
 
-def read_price_metrics(codes: list[str]) -> pd.DataFrame:
-    prices = read_quotes_daily(codes, ["code", "trade_date", "close", "amount", "updated_at"])
+def read_price_metrics(codes: list[str], as_of_date: str | None = None) -> pd.DataFrame:
+    prices = read_quotes_daily(codes, ["code", "trade_date", "close", "amount", "updated_at"], as_of_date=as_of_date)
     if prices.empty:
         return pd.DataFrame(columns=["code"])
     rows = []
@@ -73,15 +76,26 @@ def read_price_metrics(codes: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def read_index_constituents(index_symbol: str = "000300", constituent_date: str = "latest") -> pd.DataFrame:
+def read_index_constituents(index_symbol: str = "000300", constituent_date: str = "latest", as_of_date: str | None = None) -> pd.DataFrame:
     conn = sqlite3.connect(db_path())
     try:
         index_symbol = str(index_symbol).strip() or "000300"
         if constituent_date == "latest":
-            row = conn.execute(
-                "select max(constituent_date) from index_constituents where index_symbol=?",
-                (index_symbol,),
-            ).fetchone()
+            if as_of_date:
+                row = conn.execute(
+                    "select max(constituent_date) from index_constituents where index_symbol=? and constituent_date<=?",
+                    (index_symbol, as_of_date),
+                ).fetchone()
+                if not row or not row[0]:
+                    row = conn.execute(
+                        "select max(constituent_date) from index_constituents where index_symbol=?",
+                        (index_symbol,),
+                    ).fetchone()
+            else:
+                row = conn.execute(
+                    "select max(constituent_date) from index_constituents where index_symbol=?",
+                    (index_symbol,),
+                ).fetchone()
             constituent_date = row[0] if row and row[0] else ""
         if not constituent_date:
             return pd.DataFrame(columns=["index_symbol", "index_name", "constituent_date", "code", "name", "exchange", "weight", "weight_date"])

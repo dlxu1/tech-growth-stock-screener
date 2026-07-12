@@ -96,6 +96,74 @@ class DashboardPipelineTest(unittest.TestCase):
         self.assertEqual(model["summary"]["stock_type_filter"]["before_count"], 2)
         self.assertEqual(model["summary"]["stock_type_filter"]["after_count"], 1)
 
+    def test_as_of_date_is_passed_to_all_dashboard_stages(self) -> None:
+        args = Namespace(
+            strategy="tech_growth",
+            coarse_strategy="all",
+            top=5,
+            sector_top=100,
+            coarse_top=5,
+            sector="",
+            stock_types="",
+            stock_type_config="",
+            as_of_date="2026-06-28",
+        )
+        one_row = pd.DataFrame([{"code": "000001", "name": "样本", "board_name": "半导体"}])
+
+        with (
+            patch("dashboard.pipeline.sector_screen.run", return_value=(one_row, {"stage": "sector_screen"})) as sector_run,
+            patch("dashboard.pipeline.run_combo", return_value=(one_row.assign(combo_score=80), {"stage": "combo"})) as combo_run,
+            patch("dashboard.pipeline.run_fine", return_value=(one_row.assign(technical_score=70, combo_score=80), {"stage": "fine"})) as fine_run,
+            patch("dashboard.pipeline.run_trade_plan", return_value=(one_row.assign(action="观察"), {"stage": "plan"})) as plan_run,
+            patch("backtest.repository.load_forward_quotes", return_value=pd.DataFrame()) as quote_loader,
+        ):
+            model = run_dashboard(args)
+
+        self.assertEqual(sector_run.call_args.args[0].as_of_date, "2026-06-28")
+        self.assertEqual(combo_run.call_args.args[0].as_of_date, "2026-06-28")
+        self.assertEqual(fine_run.call_args.args[0].as_of_date, "2026-06-28")
+        self.assertEqual(plan_run.call_args.args[0].as_of_date, "2026-06-28")
+        self.assertEqual(model["summary"]["as_of_date"], "2026-06-28")
+        quote_loader.assert_called_once()
+        self.assertEqual(model["backtest"]["summary"]["signal_date"], "2026-06-28")
+        self.assertIn("signal_validation", model)
+        self.assertIn("operation_backtest", model)
+        self.assertEqual(model["signal_validation"]["summary"]["signal_dates"], ["2026-06-28"])
+        self.assertEqual(model["operation_backtest"]["summary"]["signal_date"], "2026-06-28")
+        self.assertEqual([item["title"] for item in model["backtest"]["strategies"]], ["宏观潜力 Top10", "技术分 Top10", "综合关注 Top10"])
+
+    def test_backtest_date_can_differ_from_matrix_date(self) -> None:
+        args = Namespace(
+            strategy="tech_growth",
+            coarse_strategy="all",
+            top=5,
+            sector_top=100,
+            coarse_top=5,
+            sector="",
+            stock_types="",
+            stock_type_config="",
+            as_of_date="2026-07-10",
+            backtest_date="2026-06-30",
+        )
+        one_row = pd.DataFrame([{"code": "000001", "name": "样本", "board_name": "半导体"}])
+
+        with (
+            patch("dashboard.pipeline.sector_screen.run", return_value=(one_row, {"stage": "sector_screen"})) as sector_run,
+            patch("dashboard.pipeline.run_combo", return_value=(one_row.assign(combo_score=80), {"stage": "combo"})),
+            patch("dashboard.pipeline.run_fine", return_value=(one_row.assign(technical_score=70, combo_score=80), {"stage": "fine"})),
+            patch("dashboard.pipeline.run_trade_plan", return_value=(one_row.assign(action="观察"), {"stage": "plan"})),
+            patch("backtest.repository.load_forward_quotes", return_value=pd.DataFrame()) as quote_loader,
+        ):
+            model = run_dashboard(args)
+
+        self.assertEqual(model["summary"]["as_of_date"], "2026-07-10")
+        self.assertEqual(model["summary"]["backtest_date"], "2026-06-30")
+        self.assertEqual(model["backtest"]["summary"]["signal_date"], "2026-06-30")
+        self.assertEqual(model["signal_validation"]["summary"]["signal_dates"], ["2026-06-30"])
+        self.assertEqual(model["operation_backtest"]["summary"]["signal_date"], "2026-06-30")
+        self.assertEqual(quote_loader.call_args.kwargs["after_date"], "2026-06-30")
+        self.assertIn("2026-06-30", [call.args[0].as_of_date for call in sector_run.call_args_list])
+
 
 if __name__ == "__main__":
     unittest.main()

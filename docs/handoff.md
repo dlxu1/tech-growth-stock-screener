@@ -14,6 +14,9 @@ Use this file as the first stop when a new thread needs to continue work.
 ```
 
 - Current visible dashboard refinements:
+  - Dashboard-oriented commands now default to the cached CSI 300 universe. The
+    historical date form preserves universe, index symbol, sector, and
+    stock-type filters when recalculating.
   - `组合评分` wording has been changed to `宏观粗筛`.
   - `板块筛选` is displayed as `股票池`; the table includes `股票类型`, and hover
     text shows the matched keyword and board-name classification basis.
@@ -42,6 +45,43 @@ Use this file as the first stop when a new thread needs to continue work.
   - Dashboard models now include `summary.health`, and the HTML shows a compact
     data-health strip above the matrix. Use `validate-dashboard` to print the
     same audit from the CLI.
+  - The potential-timing matrix includes a `历史日期重算` date selector. It is
+    useful through `dashboard-server`; choosing a date reloads
+    `/dashboard?as_of_date=YYYY-MM-DD` and reruns the full serial flow using
+    cached daily quotes up to that date.
+  - If the requested historical date is earlier than every cached CSI 300
+    constituent snapshot, replay falls back to the latest cached constituent
+    snapshot while still cutting off quotes/report dates by `as_of_date`.
+  - In cache mode, if the selected historical date points to report periods that
+    are not cached, replay falls back to the latest cached financial-report
+    source table and lets the data-health strip report any quote coverage gaps.
+  - When `--as-of-date` is present, dashboard models also include a `数据回测`
+    section. It tests three single-date signal groups: `宏观潜力 Top10`,
+    `技术分 Top10`, and `综合关注 Top10`, using next-trading-day open to 7/14/21
+    trading-day close returns. `--backtest-date` and the page-level回测信号日
+    selector can choose a backtest signal date independently from the matrix
+    `as_of_date`.
+  - Dashboard models now include `operation_backtest` when a signal date is
+    available. The HTML shows `操作回测` below fixed-horizon `数据回测`, simulating
+    high-potential+good-timing executable `操作建议` rows with planned-entry
+    triggers, A-share T+1 exits, 5% default profit target, initial-stop exits,
+    and held-to-latest close fallback. Buy-day target/stop touches are ignored
+    for exits; selling starts on the next trading day.
+  - `signal-validate` validates score-signal quality across one or more
+    historical signal dates. It aggregates all candidates by matrix quadrant
+    and attention-score rank buckets using the same fixed next-open to
+    N-day-close return rule. It intentionally does not simulate operation-plan
+    triggers yet.
+  - When dashboard models include signal validation, the HTML dashboard shows
+    `信号验证与预警` below `数据回测`, with holding-period tabs, quadrant
+    heatmap, attention-score bucket bars, and an `象限失效预警` status comparing
+    `好时机+高潜力` against `其他象限`.
+  - Signal warnings now have a small-sample guard: fewer than 5 complete
+    `好时机+高潜力` rows shows `样本不足` instead of a failure trigger. Ranking
+    validation is a separate `排序有效性预警` comparing `Top 1-10` with
+    `Top 11-20`. Red `触发` now also requires at least 3 sampled signal dates;
+    underperformance from one or two signal dates is shown as yellow
+    `单日观察`.
   - The separate candidate-priority list has been removed from the current UI.
 
 ## Standard Verification
@@ -59,6 +99,15 @@ Run this after dashboard renderer or pipeline changes:
 ```bash
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py validate-dashboard --source cache
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py signal-backtest --source cache --backtest-date 2026-06-30 --format markdown
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py operation-backtest --source cache --backtest-date 2026-05-25 --format markdown
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py signal-validate --source cache --backtest-date 2026-05-01 --format markdown
+```
+
+Run the local historical matrix dashboard:
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard-server --source cache --host 127.0.0.1 --port 5001
 ```
 
 Focused dashboard checks:

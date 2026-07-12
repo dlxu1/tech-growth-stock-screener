@@ -43,6 +43,28 @@ class FineSerialFlowTest(unittest.TestCase):
         self.assertEqual(meta["upstream_stage"], "combo")
         self.assertEqual(meta["upstream_candidates"], 1)
 
+    def test_run_fine_loads_quotes_at_as_of_date(self) -> None:
+        candidates = pd.DataFrame(
+            [
+                {
+                    "code": "000001",
+                    "name": "宏观入选",
+                    "board_name": "半导体",
+                    "matched_strategies": "多策略共振",
+                    "combo_score": 88.5,
+                }
+            ]
+        )
+        args = Namespace(coarse_strategy="all", coarse_top=50, top=5, min_amount=20000000, as_of_date="2026-06-28")
+
+        with (
+            patch("strategies.fine.technical.fine_repository.load_quotes", return_value=pd.DataFrame()) as load_quotes,
+            patch("strategies.fine.technical.persist_layer_result"),
+        ):
+            run(args, candidates=candidates)
+
+        load_quotes.assert_called_once_with(["000001"], as_of_date="2026-06-28")
+
 
 if __name__ == "__main__":
     unittest.main()

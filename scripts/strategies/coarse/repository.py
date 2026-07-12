@@ -98,7 +98,7 @@ def build_base_universe(args) -> tuple[pd.DataFrame, dict]:
         base = base.merge(optional, on="code", how="left")
     if "revenue" in base.columns and "rd_expense" in base.columns:
         base["rd_intensity"] = pd.to_numeric(base["rd_expense"], errors="coerce") / pd.to_numeric(base["revenue"], errors="coerce")
-    price_metrics = read_price_metrics(base["code"].astype(str).tolist())
+    price_metrics = read_price_metrics(base["code"].astype(str).tolist(), as_of_date=getattr(args, "as_of_date", None))
     if not price_metrics.empty:
         base = base.merge(price_metrics, on="code", how="left")
     growth_flags = base.assign(_growth_positive=_positive(base["revenue_yoy"]) & _positive(base["profit_yoy"]))

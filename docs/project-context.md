@@ -24,6 +24,9 @@ Current default dashboard output:
 .cache/reports/dashboard_latest.html
 ```
 
+Dashboard-oriented commands default to the cached CSI 300 universe. Use
+`--universe tech` only when the technology keyword pool is explicitly needed.
+
 ## Key Modules
 
 - `scripts/run.py`: CLI entry point.
@@ -66,6 +69,20 @@ Current default dashboard output:
   stock type. It also has local stock-type chips for quickly filtering the matrix
   without rerunning the pipeline. Full stage tables remain available below the
   candidate overview.
+- The matrix includes a historical date selector. In `dashboard-server` mode,
+  changing the date reloads the dashboard with `as_of_date` and reruns the full
+  serial flow using cached daily quotes up to that date while preserving the
+  current universe/filter parameters. Static HTML can also be generated for a
+  fixed historical date with `--as-of-date`.
+- When signal-validation data is present, the dashboard shows a `信号验证与预警`
+  section under `数据回测`. It visualizes the selected signal date's matrix
+  quadrant performance and attention-score bucket performance across holding
+  horizons, and flags whether `好时机+高潜力` is underperforming `其他象限`.
+- When operation-backtest data is present, the dashboard shows an `操作回测`
+  section below fixed-horizon `数据回测`. It simulates executable operation
+  plans for `好时机+高潜力` stocks with planned-entry triggers, A-share T+1
+  sell eligibility, a default 5% profit target, initial-stop exits, and
+  held-to-latest-close fallback.
 - Table headers should use Chinese labels where known.
 - Score headers should include an `i` help button when calculation help exists.
 - The dashboard is a static local HTML file. After renderer changes, regenerate it.

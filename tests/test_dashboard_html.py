@@ -22,6 +22,9 @@ class DashboardHtmlTest(unittest.TestCase):
                     "before_count": 2,
                     "after_count": 1,
                 },
+                "as_of_date": "2026-07-10",
+                "universe": "csi300",
+                "universe_index_symbol": "000300",
                 "health": {
                     "health_score": 70,
                     "freshness": {"latest_trade_date": "2026-07-09", "lag_days": 1},
@@ -193,6 +196,117 @@ class DashboardHtmlTest(unittest.TestCase):
             "traces": {
                 "000725": [{"stage": "sector_screen", "title": "板块筛选", "label": "京东方A", "row": {}}]
             },
+            "backtest": {
+                "summary": {"signal_date": "2026-07-10", "top": 10, "holding_days": [7, 14, 21]},
+                "strategies": [
+                    {
+                        "key": "macro",
+                        "title": "宏观潜力 Top10",
+                        "horizons": {
+                            7: {"holding_days": 7, "complete_count": 10, "avg_return_pct": 0.0123, "win_rate": 0.6},
+                            14: {"holding_days": 14, "complete_count": 10, "avg_return_pct": 0.0234, "win_rate": 0.7},
+                            21: {"holding_days": 21, "complete_count": 8, "avg_return_pct": -0.01, "win_rate": 0.4},
+                        },
+                        "rows": [
+                            {
+                                "code": "000725",
+                                "name": "京东方A",
+                                "score": 88.6,
+                                "holding_days": 7,
+                                "buy_date": "2026-07-13",
+                                "sell_date": "2026-07-21",
+                                "return_pct": 0.0123,
+                                "data_status": "complete",
+                            }
+                        ],
+                    }
+                ],
+            },
+            "operation_backtest": {
+                "summary": {
+                    "signal_date": "2026-07-10",
+                    "profit_target_pct": 0.05,
+                    "candidate_count": 2,
+                    "trade_count": 1,
+                    "untriggered_count": 1,
+                    "take_profit_count": 1,
+                    "stop_loss_count": 0,
+                    "hold_count": 0,
+                    "win_rate": 1.0,
+                    "realized_avg_return_pct": 0.05,
+                    "total_avg_return_pct": 0.05,
+                },
+                "rows": [
+                    {
+                        "code": "000725",
+                        "name": "京东方A",
+                        "signal_date": "2026-07-10",
+                        "action": "等待回踩买入",
+                        "planned_entry": 4.18,
+                        "initial_stop": 3.98,
+                        "profit_target_price": 4.39,
+                        "buy_date": "2026-07-13",
+                        "buy_price": 4.18,
+                        "sell_date": "2026-07-21",
+                        "sell_price": 4.39,
+                        "exit_reason": "take_profit",
+                        "return_pct": 0.05,
+                        "holding_days": 7,
+                        "status": "take_profit",
+                        "path": [
+                            {"trade_date": "2026-07-13", "open": 4.2, "high": 4.25, "low": 4.1, "close": 4.18},
+                            {"trade_date": "2026-07-21", "open": 4.35, "high": 4.4, "low": 4.3, "close": 4.39},
+                        ],
+                    },
+                    {
+                        "code": "000001",
+                        "name": "平安银行",
+                        "signal_date": "2026-07-10",
+                        "action": "等待回踩买入",
+                        "planned_entry": 10.0,
+                        "initial_stop": 9.5,
+                        "profit_target_price": None,
+                        "buy_date": None,
+                        "buy_price": None,
+                        "sell_date": None,
+                        "sell_price": None,
+                        "exit_reason": "",
+                        "return_pct": None,
+                        "holding_days": 0,
+                        "status": "not_triggered",
+                        "path": [],
+                    },
+                ],
+            },
+            "signal_validation": {
+                "summary": {
+                    "signal_dates": ["2026-05-13"],
+                    "signal_date_count": 1,
+                    "candidate_count": 100,
+                    "holding_days": [7, 14, 21],
+                    "bucket_size": 10,
+                },
+                "quadrants": {
+                    "好时机+高潜力": {
+                        7: {"holding_days": 7, "complete_count": 4, "avg_return_pct": 0.1436, "median_return_pct": 0.0672, "win_rate": 1.0},
+                        14: {"holding_days": 14, "complete_count": 4, "avg_return_pct": 0.3974, "median_return_pct": 0.4261, "win_rate": 1.0},
+                    },
+                    "其他象限": {
+                        7: {"holding_days": 7, "complete_count": 57, "avg_return_pct": 0.0011, "median_return_pct": -0.0079, "win_rate": 0.4737},
+                        14: {"holding_days": 14, "complete_count": 57, "avg_return_pct": 0.0087, "median_return_pct": -0.0279, "win_rate": 0.2632},
+                    },
+                },
+                "attention_buckets": {
+                    "Top 1-10": {
+                        7: {"holding_days": 7, "complete_count": 10, "avg_return_pct": 0.0521, "median_return_pct": 0.0321, "win_rate": 0.7},
+                        14: {"holding_days": 14, "complete_count": 10, "avg_return_pct": 0.2466, "median_return_pct": 0.2356, "win_rate": 0.8},
+                    },
+                    "Top 11-20": {
+                        7: {"holding_days": 7, "complete_count": 10, "avg_return_pct": 0.0792, "median_return_pct": 0.0392, "win_rate": 0.6},
+                        14: {"holding_days": 14, "complete_count": 10, "avg_return_pct": 0.0978, "median_return_pct": 0.0672, "win_rate": 0.6},
+                    },
+                },
+            },
         }
 
         html = render_dashboard_html(model)
@@ -209,6 +323,63 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("科技股 1/2", html)
         self.assertIn("潜力看宏观，时机看技术", html)
         self.assertIn("潜力-时机矩阵", html)
+        self.assertIn('id="asOfDate"', html)
+        self.assertIn('value="2026-07-10"', html)
+        self.assertIn('name="universe" value="csi300"', html)
+        self.assertIn('name="universe_index_symbol" value="000300"', html)
+        self.assertIn('action="/dashboard"', html)
+        self.assertIn("历史日期重算", html)
+        self.assertIn("数据回测", html)
+        self.assertIn("宏观潜力 Top10", html)
+        self.assertIn("平均收益", html)
+        self.assertIn("7日明细", html)
+        self.assertIn('id="backtestStrategyTabs"', html)
+        self.assertIn('id="backtestHorizonTabs"', html)
+        self.assertIn('id="backtestMatrixSummary"', html)
+        self.assertIn('id="backtestTableBody"', html)
+        self.assertIn('id="backtestChart"', html)
+        self.assertIn("好时机+高潜力", html)
+        self.assertIn("backtest-row-label", html)
+        self.assertIn("matrixCandidateByCode", html)
+        self.assertIn("isHighPotentialGoodTiming", html)
+        self.assertIn("renderBacktestMatrixSummary", html)
+        self.assertIn("renderBacktestTable", html)
+        self.assertIn("renderBacktestChart", html)
+        self.assertIn('backtestTableBody?.addEventListener("mouseover"', html)
+        self.assertIn("data-backtest-row", html)
+        self.assertIn("操作回测", html)
+        self.assertIn("5%止盈", html)
+        self.assertIn('id="operationBacktestSummary"', html)
+        self.assertIn('id="operationBacktestTableBody"', html)
+        self.assertIn('id="operationBacktestPath"', html)
+        self.assertIn("renderOperationBacktestPanel", html)
+        self.assertIn("operation-row-active", html)
+        self.assertIn("data-operation-row", html)
+        self.assertIn("信号验证与预警", html)
+        self.assertIn('id="validationHorizonTabs"', html)
+        self.assertIn('id="validationOverview"', html)
+        self.assertIn('id="validationQuadrants"', html)
+        self.assertIn('id="validationBuckets"', html)
+        self.assertIn("renderSignalValidationPanel", html)
+        self.assertIn("validation-heatmap", html)
+        self.assertIn("validation-bucket-bars", html)
+        self.assertIn("象限失效预警", html)
+        self.assertIn("validationMinCompleteSamples = 5", html)
+        self.assertIn("样本不足", html)
+        self.assertIn("排序有效性预警", html)
+        self.assertIn("validationMinSignalDatesForFailure = 3", html)
+        self.assertIn("单日观察", html)
+        self.assertIn("信号日少于 ${validationMinSignalDatesForFailure} 个", html)
+        self.assertIn("Top 1-10 未跑赢 Top 11-20", html)
+        self.assertIn("验证口径：以下统计来自信号日 2026-05-13", html)
+        self.assertIn("当前矩阵日为 2026-07-10", html)
+        self.assertIn("象限数量不会等于当前矩阵内可见股票数", html)
+        self.assertNotIn("backtest-list", html)
+        self.assertNotIn("backtest-strategy", html)
+        self.assertIn("回测信号日", html)
+        self.assertIn('name="backtest_date"', html)
+        self.assertIn('value="2026-07-10"', html)
+        self.assertIn('name="as_of_date" value="2026-07-10"', html)
         self.assertNotIn("候选优先级", html)
         self.assertIn("股票池", html)
         self.assertIn("技术分析", html)

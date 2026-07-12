@@ -10,8 +10,8 @@ from infra.cache import read_quotes_daily
 from strategies.coarse.registry import run as run_coarse
 
 
-def load_quotes(codes: list[str]) -> pd.DataFrame:
-    return read_quotes_daily(codes)
+def load_quotes(codes: list[str], as_of_date: str | None = None) -> pd.DataFrame:
+    return read_quotes_daily(codes, as_of_date=as_of_date)
 
 
 def coarse_candidates(args) -> tuple[pd.DataFrame, dict]:
@@ -31,4 +31,3 @@ def coarse_candidates(args) -> tuple[pd.DataFrame, dict]:
         )
     )
     return grouped, meta
-

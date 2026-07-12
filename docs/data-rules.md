@@ -24,6 +24,15 @@ Prefer cache-backed commands for local iteration:
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
 ```
 
+Historical dashboard replay uses `--as-of-date YYYY-MM-DD`. When this parameter
+is present, daily quote reads for macro price metrics, technical analysis, and
+operation advice only use `quotes_daily.trade_date <= as_of_date`. With
+`--report-date auto`, financial-report candidates are also capped to quarter
+dates not later than `as_of_date`. This is a signal snapshot for research
+review. The optional signal backtest described below is the only step that may
+read daily quotes after `as_of_date`, and it does so only to calculate fixed
+forward holding returns for the selected signal date.
+
 ## Stage Contracts
 
 ### 股票池
@@ -56,6 +65,9 @@ Presentation rules:
 - `--stock-types` can select one or more stock types, such as `科技股,周期股`,
   for the downstream dashboard flow. The stock-pool stage still displays the
   full classified pool; only the candidates passed to `宏观粗筛` are filtered.
+- Dashboard, dashboard-server, and validate-dashboard default to
+  `--universe csi300` so the interactive matrix starts from the cached CSI 300
+  pool unless another universe is explicitly selected.
 - `market_cap`: divide by `100000000`, keep two decimals, append `亿`.
 - `amount_20d`: divide by `100000000`, keep two decimals, append `亿`.
 - `revenue_yoy`, `profit_yoy`, `return_60d`, `max_drawdown_252d`: keep two decimals and append `%`.
@@ -171,6 +183,173 @@ reflects combined attention. Point hover text should explain the threshold
 comparison so red/blue/green status is not confused with the background zone.
 The matrix has local stock-type chips that filter the currently displayed
 matrix candidates by their configured `stock_type`.
+
+The matrix can be recalculated for a historical date through the local
+dashboard server or a static dashboard generated with `--as-of-date`. Changing
+the date must rerun the serial dashboard flow and rebuild all matrix scores from
+the selected date's available cached data.
+When the CSI 300 constituent cache has no snapshot at or before the selected
+date, historical replay falls back to the latest cached constituent snapshot and
+still applies the selected date cutoff to quotes and financial-report dates.
+In strict cache mode, if the requested historical report period is not cached,
+the dashboard falls back to the latest cached financial-report table so the
+page can still render with an explicit data-health warning rather than failing.
+
+### 数据回测
+
+Purpose: evaluate how the selected date's dashboard scores would have behaved
+under simple fixed holding periods. This is a research replay module, not a
+position-sizing, execution, or investment-advice engine.
+
+Signal date:
+
+- The dashboard backtest can use `--backtest-date YYYY-MM-DD`. If it is omitted,
+  it falls back to `--as-of-date`.
+- The standalone CLI `signal-backtest` requires either `--backtest-date` or
+  `--as-of-date`.
+- If `backtest_date` differs from the matrix `as_of_date`, the backtest reruns
+  the serial dashboard signal flow for `backtest_date` before reading any future
+  quote rows. The main matrix can remain on the current or another selected
+  date.
+
+Selectors:
+
+- `宏观潜力 Top10`: top 10 by `combo_score`.
+- `技术分 Top10`: top 10 by `technical_score`.
+- `综合关注 Top10`: top 10 by `attention_score`, where `attention_score =
+  combo_score * 65% + technical_score * 35%`.
+
+Return rule:
+
+- Buy price: next available trading day's `open` after the signal date.
+- Sell price: the N-th future trading day's `close`.
+- Default holding horizons: 7, 14, and 21 trading days. CLI parameter
+  `--holding-days` can override this comma-separated list.
+- If future quote rows are absent or shorter than the required horizon, mark
+  the row as `missing_future_quotes` or `insufficient_future_quotes`; do not
+  fill, forward-fill, or synthesize prices.
+- Summary returns use only complete rows.
+
+Dashboard presentation:
+
+- Show one `数据回测` section under the potential-timing matrix when backtest
+  data exists.
+- For each selector, display complete sample count, average return, and win
+  rate for each holding period, plus default 7-day detail rows.
+- Keep the text conservative and label it as research verification.
+
+### 操作回测
+
+Purpose: evaluate whether the rule-based `操作建议` entries for high-potential
+good-timing stocks would have produced positive returns under simple execution
+rules. This is still research verification, not investment advice.
+
+Command:
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py operation-backtest --source cache --backtest-date 2026-05-25
+```
+
+Selection rules:
+
+- The signal date uses `--backtest-date`, falling back to `--as-of-date`.
+- The dashboard signal flow reruns for the signal date before future quotes are
+  read.
+- Only `操作建议` rows with macro potential `>= 80`, technical timing `>= 75`,
+  `usable_for_plan=True`, and executable plan strategies are simulated.
+- Executable strategies are `breakout_buy`, `pullback_ma_buy`, and
+  `volume_confirm_buy`. `观察` and `暂不交易` rows are not bought.
+
+Execution rules:
+
+- Buy checks start on the first trading day after the signal date.
+- `breakout_buy`: buy at `planned_entry` if the day's high reaches that price.
+- `pullback_ma_buy`: buy at `planned_entry` if the day's low/high range touches
+  that price.
+- `volume_confirm_buy`: buy at `planned_entry` if the day's high reaches that
+  price and amount meets `volume_confirm_amount` when that threshold exists.
+- A-share T+1 is enforced: after a buy is triggered, target/stop checks start
+  on the next trading day. The buy date itself is never used as an exit date.
+- Profit target defaults to `5%`, configurable by `--operation-profit-target`.
+- Stop loss uses `initial_stop`.
+- If stop and target are both touched on the same day, the simulation treats the
+  stop as hit first to avoid overstating returns without intraday order data.
+  This same-day collision rule applies only on sell-eligible trading days after
+  the T+1 holding constraint is satisfied.
+- If neither target nor stop is touched before the latest cached quote, the row
+  exits at the latest close with status `持有至截止日`.
+- If no buy trigger occurs, the row is `未触发` and is not included in traded
+  return averages.
+
+Dashboard presentation:
+
+- Show one `操作回测` section below fixed-horizon `数据回测` when operation
+  backtest data exists.
+- Show operation sample count, successful buys, untriggered rows, take-profit
+  exits, stop-loss exits, open holds, traded win rate, realized average return,
+  and average return including open holds.
+- The detail table shows each row's action, buy/sell dates and prices, exit
+  reason, return, and status.
+- Clicking or hovering a row shows the operation path with planned entry,
+  initial stop, 5% target, and daily high/low/close points used by the
+  simulation.
+
+### 信号有效性验证
+
+Purpose: diagnose whether the scoring signal itself has predictive value before
+changing score formulas or operation-advice rules.
+
+Command:
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py signal-validate --source cache --backtest-date 2026-05-01
+```
+
+For multiple sampled signal dates, use `--validation-start`, `--validation-end`,
+and `--validation-step-days`.
+
+Validation rules:
+
+- Each signal date reruns the serial dashboard flow using only data available
+  at that date.
+- All dashboard candidates are classified into matrix quadrants using the same
+  thresholds as the dashboard: macro potential `>= 80` and technical timing
+  `>= 75`.
+- All candidates are also sorted by `attention_score` and grouped into
+  rank buckets such as `Top 1-10`, `Top 11-20`, and so on. `--bucket-size`
+  controls bucket width.
+- Return rules match fixed-horizon signal backtests: next trading day's open
+  to the N-th future trading day's close.
+- Statistics aggregate complete rows only and include sample count, average
+  return, median return, win rate, max return, and min return.
+
+This command validates scoring signal quality. It does not simulate
+operation-advice triggers such as planned entry, stop loss, or take-profit
+execution.
+
+Dashboard presentation:
+
+- When the dashboard model contains `signal_validation`, show one
+  `信号验证与预警` section under `数据回测`.
+- The section has holding-period tabs using the validation `holding_days`.
+- The overview shows sample count, `好时机+高潜力` average return, excess return
+  versus `其他象限`, and `象限失效预警`.
+- `象限失效预警` must treat small samples conservatively. If the
+  `好时机+高潜力` complete sample count is below 5 for the selected holding
+  period, show `样本不足` and do not mark the quadrant as failed.
+- `排序有效性预警` is separate from quadrant validation. It compares
+  `Top 1-10` against `Top 11-20`; if either bucket has fewer than 5 complete
+  samples, show `样本不足`, otherwise trigger only when `Top 1-10` does not
+  outperform `Top 11-20`.
+- Failure warnings require at least 3 sampled signal dates. If the selected
+  validation model has fewer than 3 signal dates, underperformance is shown as
+  `单日观察` with warning styling instead of red `触发`.
+- The quadrant heatmap shows sample count, average return, median return, and
+  win rate for each matrix quadrant.
+- The attention-score bucket bars show average return and win rate for buckets
+  such as `Top 1-10`, `Top 11-20`.
+- A warning is visual only. It must not change score formulas, candidate order,
+  or operation-advice rules.
 
 ### 数据健康审计
 

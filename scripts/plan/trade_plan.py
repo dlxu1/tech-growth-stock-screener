@@ -271,7 +271,7 @@ def run_trade_plan(args, candidates: pd.DataFrame | None = None) -> tuple[pd.Dat
         persist_layer_result("plan", args, result, meta)
         return result, meta
     codes = fine["code"].astype(str).str.zfill(6).tolist()
-    quotes = plan_repository.load_quotes(codes)
+    quotes = plan_repository.load_quotes(codes, as_of_date=getattr(args, "as_of_date", None))
     rows = []
     for row in fine.itertuples(index=False):
         code = str(row.code).zfill(6)

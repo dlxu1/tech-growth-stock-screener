@@ -7,6 +7,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import run
 
 
 class DashboardCliTest(unittest.TestCase):
@@ -22,6 +25,8 @@ class DashboardCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--output", result.stdout)
         self.assertIn("--combo-top", result.stdout)
+        self.assertIn("--as-of-date", result.stdout)
+        self.assertIn("--backtest-date", result.stdout)
         self.assertIn("--stock-type-config", result.stdout)
         self.assertIn("--stock-types", result.stdout)
         self.assertNotIn("--capital", result.stdout)
@@ -43,6 +48,31 @@ class DashboardCliTest(unittest.TestCase):
         self.assertIn("--format", result.stdout)
         self.assertIn(str(ROOT / ".venv" / "bin" / "python"), result.stdout)
         self.assertIn(str(ROOT / "scripts" / "run.py"), result.stdout)
+
+    def test_dashboard_server_command_is_registered(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "scripts/run.py", "dashboard-server", "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--host", result.stdout)
+        self.assertIn("--port", result.stdout)
+        self.assertIn("--as-of-date", result.stdout)
+        self.assertIn("--backtest-date", result.stdout)
+
+    def test_dashboard_server_defaults_to_csi300_universe(self) -> None:
+        old_argv = sys.argv[:]
+        try:
+            sys.argv = ["run.py", "dashboard-server"]
+            args = run.parse_args()
+        finally:
+            sys.argv = old_argv
+
+        self.assertEqual(args.universe, "csi300")
 
 
 if __name__ == "__main__":

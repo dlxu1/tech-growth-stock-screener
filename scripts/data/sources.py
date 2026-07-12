@@ -8,6 +8,7 @@ This module remains as a compatibility adapter for existing fetch functions.
 from __future__ import annotations
 
 import math
+import re
 import sys
 import time
 from datetime import date
@@ -293,10 +294,58 @@ def fetch_financial_report_efinance(report_date: str, no_proxy: bool) -> pd.Data
     return ef.stock.get_all_company_performance(rd)
 
 
-def load_financial_report(report_date: str, refresh: bool, source: str, no_proxy: bool) -> tuple[pd.DataFrame, str, str]:
+def financial_report_candidates(report_date: str, as_of_date: str | None = None) -> list[str]:
+    if report_date != "auto":
+        return [report_date]
+    if as_of_date:
+        try:
+            return report_date_candidates(today=date.fromisoformat(as_of_date))
+        except ValueError:
+            pass
+    return report_date_candidates()
+
+
+def _cached_financial_report_table(report_date: str, as_of_date: str | None = None) -> tuple[pd.DataFrame, str, str] | None:
+    conn = connect()
+    try:
+        rows = conn.execute(
+            """
+            select table_key
+            from cache_meta
+            where table_key like 'stock_yjbb_%' and status='ok'
+            order by table_key desc
+            """
+        ).fetchall()
+        report_dates = []
+        for (table_key,) in rows:
+            match = re.fullmatch(r"stock_yjbb_(\d{8})", str(table_key))
+            if match:
+                report_dates.append(match.group(1))
+        if not report_dates:
+            return None
+        if report_date != "auto":
+            selected = report_date if report_date in report_dates else ""
+        elif as_of_date:
+            selected = next((date_value for date_value in sorted(report_dates, reverse=True) if date_value <= as_of_date.replace("-", "")), "")
+            if not selected:
+                selected = max(report_dates)
+        else:
+            selected = max(report_dates)
+        if not selected:
+            return None
+        table_key = f"stock_yjbb_{selected}"
+        cached = read_cached_source(conn, table_key)
+        if cached is None or cached.empty:
+            return None
+        return cached, selected, f"db:{table_key}"
+    finally:
+        conn.close()
+
+
+def load_financial_report(report_date: str, refresh: bool, source: str, no_proxy: bool, as_of_date: str | None = None) -> tuple[pd.DataFrame, str, str]:
     import akshare as ak
 
-    candidates = report_date_candidates() if report_date == "auto" else [report_date]
+    candidates = financial_report_candidates(report_date, as_of_date=as_of_date)
     errors = []
     for rd in candidates:
         try:
@@ -314,6 +363,10 @@ def load_financial_report(report_date: str, refresh: bool, source: str, no_proxy
                 return df, rd, chosen_source
         except Exception as exc:
             errors.append(f"{rd}: {exc}")
+    if source == "cache" and not refresh:
+        cached = _cached_financial_report_table(report_date, as_of_date=as_of_date)
+        if cached is not None:
+            return cached
     raise RuntimeError("No financial report table available. " + "; ".join(errors[:5]))
 
 

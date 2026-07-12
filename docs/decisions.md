@@ -167,3 +167,172 @@ visible without changing screening formulas.
 Implication: data-health checks must remain diagnostic only. They may report
 missing quote coverage, stale trade dates, score-range errors, and serial-stage
 breaks, but must not silently change candidate selection or operation plans.
+
+## 2026-07-12: Matrix Supports Historical Date Replay
+
+Decision: the dashboard accepts `--as-of-date` and the local dashboard server
+can recalculate `/dashboard?as_of_date=YYYY-MM-DD`. The potential-timing matrix
+date selector is a research replay control: it reruns the full serial dashboard
+flow using daily quotes no later than the selected date.
+
+Reason: the next analysis need is to inspect how a few matrix stocks' macro
+potential, technical timing, and attention scores changed at historical points,
+without introducing a full trade simulator.
+
+Implication: historical replay must keep the existing stage order and scoring
+formulas. Do not treat it as realized P&L backtesting, and do not use daily
+quotes after the selected date in macro price metrics, technical analysis, or
+operation advice.
+
+## 2026-07-12: Dashboard Defaults To CSI 300
+
+Decision: dashboard-oriented commands (`dashboard`, `dashboard-server`, and
+`validate-dashboard`) default to `--universe csi300`. The historical date form
+preserves the current universe, index symbol, sector, and stock-type filters
+when submitting a new date.
+
+Reason: the interactive matrix is currently used as a CSI 300 research surface,
+and date switching should not silently fall back to the technology keyword pool.
+
+Implication: broad screen commands can still use their own defaults, but the
+dashboard path must keep the selected stock pool stable across historical
+recalculations.
+
+## 2026-07-12: CSI 300 Replay Falls Back To Cached Constituents
+
+Decision: if `--as-of-date` is earlier than every cached CSI 300 constituent
+snapshot, historical replay uses the latest cached constituent snapshot instead
+of failing.
+
+Reason: the local cache may only contain the latest CSI 300 constituent table,
+while the user still needs to replay quote and score signals on earlier dates.
+
+Implication: this fallback is a constituent-universe approximation. Quote reads
+and financial-report date selection must still respect `as_of_date`.
+
+## 2026-07-12: Cache Replay Falls Back To Cached Financial Reports
+
+Decision: when `--source cache` historical replay cannot find a cached
+financial-report table for the requested auto report candidates, it falls back
+to the latest cached `stock_yjbb_YYYYMMDD` source table.
+
+Reason: the local dashboard should render and expose data-health degradation
+instead of returning HTTP 500 when older report periods were never cached.
+
+Implication: the fallback report date must be visible in stage metadata. Missing
+daily quotes before the cached quote range should remain a health warning rather
+than being hidden or forward-filled.
+
+## 2026-07-12: Signal Warnings Require Multi-Date Confirmation
+
+Decision: `信号验证与预警` keeps the 5-complete-sample guard and adds a
+3-signal-date guard before showing red `触发`. When a single-date or two-date
+validation sample underperforms, the dashboard shows yellow `单日观察` instead.
+
+Reason: a single signal date can be noisy even when complete sample counts pass
+the minimum. The warning should still surface weak evidence, but red failure
+should require a broader validation window.
+
+Implication: do not silence underperformance. Prefer `signal-validate` with
+`--validation-start`, `--validation-end`, and `--validation-step-days` when
+deciding whether a scoring signal is genuinely failing.
+
+## 2026-07-12: 数据回测 Uses Single-Date Fixed Holding Signals
+
+Decision: the new signal backtest module selects the top 10 stocks from the
+selected backtest signal date by three selectors: macro potential (`combo_score`),
+technical timing (`technical_score`), and combined attention
+(`combo_score * 65% + technical_score * 35%`). It buys at the next trading day's
+open and sells at the 7th, 14th, and 21st future trading day's close.
+
+Reason: the user's immediate need is to compare how matrix scores ranked stocks
+at historical points and what those simple signal groups did afterwards. A full
+portfolio simulator with rebalancing, capital allocation, transaction costs, or
+stop/take-profit execution would add complexity before the score signal itself
+has been validated.
+
+Implication: keep `scripts/backtest/signal_backtest.py` focused on fixed-horizon
+signal groups. Do not use it to silently tune score formulas or operation-plan
+triggers. Do not mix in personal allocation fields, dynamic rebalancing, or
+operation-plan trigger execution unless a later decision expands the backtest
+scope. The dashboard may keep the matrix date and backtest signal date
+independent so a current matrix can be compared with an older signal date that
+has enough future quote data.
+
+## 2026-07-12: Dashboard Shows Signal Validation As Warnings
+
+Decision: when `signal_validation` exists in the dashboard model, the HTML
+dashboard shows a `信号验证与预警` section. The first version visualizes the
+selected signal date's quadrant and attention-bucket performance by holding
+horizon, and flags whether `好时机+高潜力` is failing versus `其他象限`.
+
+Reason: the user needs a persistent dashboard surface to diagnose whether the
+current score signal itself is valid before changing factor weights or operation
+advice rules.
+
+Implication: this module is diagnostic only. It must not mutate screening
+scores, candidate ordering, operation advice, or future quote availability.
+
+## 2026-07-12: Signal Warnings Need Minimum Sample Guard
+
+Decision: dashboard signal warnings use a minimum complete-sample guard of 5.
+When `好时机+高潜力` has fewer than 5 complete rows for the selected holding
+period, the quadrant warning shows `样本不足` instead of `触发`. Ranking
+validation is shown separately as `排序有效性预警`, comparing `Top 1-10` with
+`Top 11-20` only when both buckets have at least 5 complete rows.
+
+Reason: a two-stock or similarly tiny quadrant can look like frequent failure
+even when the result is mostly sampling noise. Separating quadrant validity from
+rank-bucket validity makes the dashboard diagnostic less jumpy.
+
+Implication: a warning state is not a score-formula change. Use it to decide
+what to investigate next, not to automatically alter thresholds or candidate
+selection.
+
+## 2026-07-12: Signal Validation Separates Scoring From Execution
+
+Decision: `signal-validate` diagnoses score-signal quality separately from
+operation-advice execution. It reruns historical dashboard signal dates, then
+aggregates fixed-horizon returns by matrix quadrant and attention-score bucket.
+
+Reason: low win rate can come from two different places: weak scoring signals
+or poor buy/sell execution. The first validation step should isolate whether
+`好时机+高潜力` and high `attention_score` groups actually outperform other
+groups before changing formulas or adding trigger-based trading rules.
+
+Implication: `signal-validate` should not simulate `planned_entry`,
+`initial_stop`, `take_profit_1r`, or `take_profit_2r`. Trigger-based operation
+advice backtesting should be a separate module so results can be compared with
+the fixed next-open baseline.
+
+## 2026-07-12: 操作回测 Simulates Plan Execution Separately
+
+Decision: add `operation-backtest` and a dashboard `操作回测` section that
+simulate executable `操作建议` rows for high-potential good-timing stocks. The
+first version buys when the plan trigger is reached, sells at a configurable
+profit target defaulting to 5%, stops at `initial_stop`, and marks untouched
+positions as held to the latest cached quote.
+
+Reason: fixed-horizon signal backtests answer whether scores rank well, while
+the user also needs to know whether the operation-plan trigger/stop/target rules
+would have produced positive returns.
+
+Implication: keep this separate from signal validation. Do not use operation
+backtest results to silently change factor scores, matrix thresholds, or plan
+rules. Same-day stop and target collisions should remain conservative unless
+intraday data is added.
+
+## 2026-07-12: 操作回测 Enforces A-share T+1
+
+Decision: operation backtests must enforce the A-share T+1 rule. A triggered
+buy can only be exited from the next trading day onward; the buy date itself is
+never eligible for take-profit or stop-loss exits.
+
+Reason: A-share cash equity positions bought today cannot be sold on the same
+trading day. Allowing same-day exits overstated execution quality when the buy
+date's high/low touched target or stop after the planned entry.
+
+Implication: the operation path can record the buy-day price range for audit,
+but target/stop checks start on the following trading day. Conservative same-day
+stop-before-target collision handling still applies on later sell-eligible
+trading days when intraday sequencing is unknown.

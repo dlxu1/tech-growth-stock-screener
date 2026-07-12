@@ -7,5 +7,5 @@ import pandas as pd
 from infra.cache import read_quotes_daily
 
 
-def load_quotes(codes: list[str]) -> pd.DataFrame:
-    return read_quotes_daily(codes)
+def load_quotes(codes: list[str], as_of_date: str | None = None) -> pd.DataFrame:
+    return read_quotes_daily(codes, as_of_date=as_of_date)
