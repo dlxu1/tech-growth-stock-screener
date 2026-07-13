@@ -8,6 +8,7 @@ import pandas as pd
 
 from dashboard.health import audit_dashboard_model
 from dashboard.stock_types import annotate_stock_types, filter_by_stock_types, load_stock_type_rules, parse_stock_types
+from dashboard.market_state import compute_dynamic_thresholds, detect
 from dashboard.view_model import build_dashboard_view_model
 from plan.trade_plan import run_trade_plan
 from strategies import sector_screen
@@ -72,6 +73,8 @@ def _build_signal_validation_model(model: dict, args) -> dict | None:
         signal_date=signal_date,
         holding_days=parse_holding_days(getattr(args, "holding_days", "")),
         bucket_size=int(getattr(args, "bucket_size", 10) or 10),
+        macro_threshold=getattr(args, "macro_potential_threshold", None),
+        tech_threshold=getattr(args, "technical_timing_threshold", None),
     )
 
 
@@ -91,6 +94,8 @@ def _build_operation_backtest_model(model: dict, args) -> dict | None:
         quotes,
         signal_date=signal_date,
         profit_target_pct=float(getattr(args, "operation_profit_target", DEFAULT_PROFIT_TARGET_PCT) or DEFAULT_PROFIT_TARGET_PCT),
+        macro_threshold=getattr(args, "macro_potential_threshold", None),
+        tech_threshold=getattr(args, "technical_timing_threshold", None),
     )
 
 
@@ -142,6 +147,19 @@ def run_dashboard(args) -> dict:
     if not combo.empty and not fine.empty and "combo_score" in combo.columns and "combo_score" not in fine.columns:
         combo_scores = combo[["code", "combo_score"]].copy()
         fine = fine.merge(combo_scores, on="code", how="left")
+    market_state = detect(
+        fine["code"].astype(str).str.zfill(6).tolist() if not fine.empty else [],
+        as_of_date=getattr(args, "as_of_date", None) or None,
+    )
+    # 市场状态影响仓位上限：防御模式下 max_position 打折
+    if market_state.label == "defensive":
+        original_max = getattr(args, "max_position", 0.25) or 0.25
+        setattr(args, "max_position", round(original_max * market_state.position_multiplier, 4))
+    # 动态阈值：根据当前候选股分数分布自适应象限线
+    adaptive_thresholds = compute_dynamic_thresholds(
+        combo_scores=pd.to_numeric(fine.get("combo_score", pd.Series(dtype=float)), errors="coerce").dropna().tolist() if not fine.empty else [],
+        technical_scores=pd.to_numeric(fine.get("technical_score", pd.Series(dtype=float)), errors="coerce").dropna().tolist() if not fine.empty else [],
+    )
     plan_candidates = _attention_ranked_candidates(fine)
     plan, plan_meta = run_trade_plan(args, candidates=plan_candidates)
     if not plan.empty and not plan_candidates.empty:
@@ -177,6 +195,17 @@ def run_dashboard(args) -> dict:
     model["summary"]["universe"] = getattr(args, "universe", "") or ""
     model["summary"]["universe_index_symbol"] = getattr(args, "universe_index_symbol", "") or ""
     model["summary"]["sector"] = getattr(args, "sector", "") or ""
+    model["summary"]["market_state"] = {
+        "label": market_state.label,
+        "median_close_vs_ma20": market_state.median_close_vs_ma20 if pd.notna(market_state.median_close_vs_ma20) else None,
+        "median_ma20_slope": market_state.median_ma20_slope if pd.notna(market_state.median_ma20_slope) else None,
+        "sample_count": market_state.sample_count,
+        "position_multiplier": market_state.position_multiplier,
+        "note": market_state.note,
+    }
+    model["summary"]["adaptive_thresholds"] = adaptive_thresholds
+    setattr(args, "macro_potential_threshold", adaptive_thresholds.get("macro_potential_threshold"))
+    setattr(args, "technical_timing_threshold", adaptive_thresholds.get("technical_timing_threshold"))
     model["summary"]["health"] = audit_dashboard_model(model)
     backtest = _build_backtest_model(model, args)
     if backtest is not None:

@@ -336,3 +336,52 @@ Implication: the operation path can record the buy-day price range for audit,
 but target/stop checks start on the following trading day. Conservative same-day
 stop-before-target collision handling still applies on later sell-eligible
 trading days when intraday sequencing is unknown.
+
+## 2026-07-13: 市场状态过滤器
+
+Decision: 在 dashboard pipeline 中新增市场状态检测模块 `scripts/dashboard/market_state.py`。在 fine 阶段完成后、操作建议生成前，用 fine 候选股的日线数据中位数判定当前市场处于 NORMAL 还是 DEFENSIVE 状态。
+
+判定规则：
+- 中位收盘价/MA20 > 1.0 且中位 MA20 斜率 > 0 → NORMAL
+- 任一条件不满足 → DEFENSIVE
+
+DEFENSIVE 状态下的影响：
+- `max_position`（仓位上限）乘以 0.60 折扣系数
+- 通过 `setattr(args, "max_position", ...)` 传递，不修改 trade_plan 代码
+
+市场状态信息通过 `model["summary"]["market_state"]` 暴露给看板和 API。
+
+Reason: 2026-06-30 回测数据表明，在市场整体下跌期间（中位股票在 MA20 下方且 MA20 下行），当前评分体系选出的高分股（前期涨幅大的科技股）反而跌幅最大。在市场下行期自动降仓位可以保护本金，这是最轻量的防御性改动。
+
+Implication:
+- 不修改任何评分公式或因子权重
+- 不影响 combo_score 和 technical_score 的计算
+- 市场状态通过已有的 args 对象传递，trade_plan 无需感知
+- future: 可以在 DEFENSIVE 状态下进一步降低 momentum_score 权重，或调整操作建议的策略偏好
+
+## 2026-07-13: 行业中性化
+
+Decision: combo_score 中的 quality_score（ROE 排序 + 毛利率排序）和 risk_control_score（最大回撤排序）从全局 percentile rank 改为行业内 percentile rank。通过 `board_name` 分组，每组内独立排名后映射到 0-1。
+
+小行业（< 5 只股票）合并为「其他」组，避免噪声。
+
+Reason: CSI 300 中金融和消费行业天然 ROE 高、毛利率稳、回撤小，在全局排名中系统性霸榜。行业中性化确保各行业内最优秀的公司都能被发现，而非集中在少数低波动行业。
+
+Implication:
+- growth_score、liquidity_score、momentum_score 保持全局 rank——这些指标跨行业可比性好
+- PE 合理度保持全局（行业 PE 中位数已隐含行业基准）
+- overlap_score 不受影响（策略排名仍基于全局 rank）
+- 代码改动集中在 `scripts/strategies/coarse/registry.py` 的 `run_combo` 和新增的 `scripts/strategies/coarse/neutralizer.py`
+
+## 2026-07-13: 矩阵象限阈值自适应
+
+Decision: 矩阵象限线（宏观潜力 ≥ 80、技术时机 ≥ 75）从固定值改为基于当前候选股分数分布的动态分位数。宏观潜力阈值取 combo_score 的 70 分位，技术时机阈值取 technical_score 的 65 分位。样本不足 15 时降级到固定默认值。
+
+阈值通过 `model["summary"]["adaptive_thresholds"]` 传递给前端和后端回测模块。`signal_backtest.py` 和 `operation_backtest.py` 的函数签名增加了可选 `macro_threshold` 和 `tech_threshold` 参数，未传入时使用模块级常量作为 fallback。
+
+Reason: 固定阈值在牛市（分数普遍膨胀）和熊市（分数普遍收缩）中表现不一致。70/65 分位确保「好时机+高潜力」始终是当前市场中最优秀的约 10-15% 的股票。
+
+Implication:
+- 历史回测中的 `signal-validate` 和 `operation-backtest` 也受益于动态阈值
+- HTML 轴标签动态显示当前阈值
+- 阈值的分位数参数（70/65）可通过 `compute_dynamic_thresholds` 的参数调整

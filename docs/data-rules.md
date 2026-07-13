@@ -377,3 +377,69 @@ screening scores, candidate order, or operation-advice rules.
 If a calculation, display unit, stage dependency, or stage field contract
 changes, update this file in the same change and add a short note to
 `docs/decisions.md`.
+
+## 2026-07-13: 市场状态过滤器
+
+### 市场状态判定
+
+Dashboard pipeline 在 fine 阶段完成后自动运行 `detect_market_state()`：
+
+- 输入：fine 候选股的全部 6 位代码 + 可选的 `as_of_date` 截断日期
+- 输出：`MarketState` 数据类，包含 label（normal/defensive）、中位指标、仓位乘数（1.0 或 0.60）、说明文字
+
+判定逻辑：对每只股票取最近 20 个交易日的 MA20，计算 close/MA20 比率和 MA20 近 6 日斜率。取所有有效股票的中位数。
+
+- 中位 close/MA20 > 1.0 且中位 MA20 斜率 > 0 → **正常模式**（NORMAL）
+- 任一条件不满足 → **防御模式**（DEFENSIVE）
+- 有效样本不足（< 1 只股票有完整 20 日数据）→ 默认正常模式
+
+### 防御模式下的行为
+
+防御模式通过修改 `args.max_position` 生效：
+- 原始 max_position（默认 0.25）× 0.60 = 0.15
+- `_score_position_cap()` 读取的是修改后的值，因此：
+  - 技术分 ≥ 85：仓位上限从 25% 降至 15%
+  - 技术分 ≥ 75：仓位上限从 min(25%, 20%) 降至 min(15%, 20%) = 15%
+  - 技术分 ≥ 60：仓位上限从 min(25%, 12%) 降至 min(15%, 12%) = 12%
+
+不修改评分公式、不改变候选股排序、不改变操作建议的策略分派逻辑。
+
+### 看板展示
+
+`model["summary"]["market_state"]` 字段包含：
+- `label`：`"normal"` 或 `"defensive"`
+- `median_close_vs_ma20`：中位比率（可能为 null）
+- `median_ma20_slope`：中位斜率（可能为 null）
+- `sample_count`：有效样本数
+- `position_multiplier`：仓位乘数
+- `note`：人类可读的说明
+
+## 2026-07-13: 行业中性化
+
+quality_score 和 risk_control_score 的 rank 操作从全局改为行业内：
+
+```
+quality_score = (
+    within_industry_rank(ROE) × 0.45
+  + within_industry_rank(gross_margin) × 0.30
+  + PE_合理度(全局) × 0.25
+) × 100
+
+risk_control_score = (
+    within_industry_rank(|max_drawdown_252d|, ascending=False) × 0.70
+  + rank_high(amount_20d, 全局) × 0.30
+) × 100
+```
+
+行业分组：按 `board_name` 分组，每组 < 5 只股票合并为「其他」组。
+
+其他评分（growth、liquidity、momentum、overlap）保持全局 rank 不变。
+
+## 2026-07-13: 动态矩阵阈值
+
+矩阵象限阈值从固定值改为自适应：
+
+- `macro_potential_threshold`：combo_score 的 70 分位（样本 ≥ 15），否则默认 80
+- `technical_timing_threshold`：technical_score 的 65 分位（样本 ≥ 15），否则默认 75
+
+阈值通过 `model["summary"]["adaptive_thresholds"]` 暴露。前端、signal_backtest、operation_backtest 均使用动态阈值。未传入时降级到模块级默认常量。

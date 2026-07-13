@@ -58,12 +58,14 @@ def _macro_score(row: pd.Series) -> float:
     return 0.0
 
 
-def _is_candidate(row: pd.Series) -> bool:
+def _is_candidate(row: pd.Series, macro_threshold: float | None = None, tech_threshold: float | None = None) -> bool:
     macro = _macro_score(row)
     technical = _num(row.get("technical_score")) or 0.0
     usable = bool(row.get("usable_for_plan", False))
     strategy = _text(row.get("primary_strategy"))
-    return macro >= MACRO_POTENTIAL_THRESHOLD and technical >= TECHNICAL_TIMING_THRESHOLD and usable and strategy in EXECUTABLE_STRATEGIES
+    mt = macro_threshold if macro_threshold is not None else MACRO_POTENTIAL_THRESHOLD
+    tt = tech_threshold if tech_threshold is not None else TECHNICAL_TIMING_THRESHOLD
+    return macro >= mt and technical >= tt and usable and strategy in EXECUTABLE_STRATEGIES
 
 
 def _empty_row(row: pd.Series, signal_date: str, status: str, reason: str) -> dict:
@@ -228,6 +230,8 @@ def build_operation_backtest_model(
     quotes: pd.DataFrame,
     signal_date: str,
     profit_target_pct: float = DEFAULT_PROFIT_TARGET_PCT,
+    macro_threshold: float | None = None,
+    tech_threshold: float | None = None,
 ) -> dict:
     """Simulate operation-plan triggers for high-potential good-timing stocks."""
 

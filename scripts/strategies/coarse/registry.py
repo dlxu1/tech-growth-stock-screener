@@ -18,6 +18,7 @@ from data.sources import load_financial_report, load_spot, normalize_financials
 from infra.persistence import persist_layer_result
 from strategies.coarse import repository as coarse_repository
 from strategies.tech_growth import build_tech_universe
+from strategies.coarse.neutralizer import _rank_high_within_group, _rank_low_within_group, safe_group_column
 
 
 @dataclass(frozen=True)
@@ -470,13 +471,14 @@ def run_combo(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFram
     hits = pd.concat(strategy_frames, ignore_index=True) if strategy_frames else pd.DataFrame()
     base_scored = base.copy()
     base_scored["growth_score"] = _rank_high(_metric(base_scored, "revenue_yoy").clip(lower=0) + _metric(base_scored, "profit_yoy").clip(lower=0)) * 100
+    _industry_groups = safe_group_column(base_scored)
     base_scored["quality_score"] = (
-        _rank_high(_metric(base_scored, "roe")) * 0.45
-        + _rank_high(_metric(base_scored, "gross_margin")) * 0.30
+        _rank_high_within_group(_metric(base_scored, "roe"), _industry_groups) * 0.45
+        + _rank_high_within_group(_metric(base_scored, "gross_margin"), _industry_groups) * 0.30
         + _reasonable_pe_score(_metric(base_scored, "pe")) * 0.25
     ) * 100
     base_scored["risk_control_score"] = (
-        _rank_low(_metric(base_scored, "max_drawdown_252d").abs()) * 0.70
+        _rank_low_within_group(_metric(base_scored, "max_drawdown_252d").abs(), _industry_groups) * 0.70
         + _rank_high(_metric(base_scored, "amount_20d")) * 0.30
     ) * 100
     base_scored["liquidity_score"] = _rank_high(_metric(base_scored, "amount_20d")) * 100

@@ -133,3 +133,19 @@ When a new durable decision is made, update:
 - `docs/decisions.md` for the decision and reason.
 - `docs/data-rules.md` if data contracts, scores, units, or formatting changed.
 - `docs/handoff.md` if the next thread should know the latest state or command.
+
+## 2026-07-13: 策略分析文档沉淀
+
+- 新增 `docs/strategy-analysis.md`：完整梳理了 combo_score、technical_score、attention_score 的计算公式、各子分判定规则、操作建议生成规则、信号验证与预警机制，以及「好时机+高潜力是否安全」的核心判断和局限性分析。
+- Dashboard server 在 `http://127.0.0.1:5001/dashboard?as_of_date=2026-06-30&backtest_date=2026-06-30` 运行中，四个模块（数据回测、操作回测、信号验证与预警、宏观潜力×技术时机矩阵）均正常展示。
+- 数据健康度 100/100，最新行情日 2026-06-30。
+
+## 2026-07-13 (续): 策略优化分析
+
+- 基于 2025-12-31 至 2026-06-30 共 6 个信号日回测数据，发现：
+  1. 评分信号在 7 日窗口单调性弱，14-21 日窗口显著增强
+  2. 「高潜力+等时机」(纯宏观高分) 在 2026-03-31 大幅跑赢所有其他象限
+  3. 2026-06-30 评分完全反向——高分股在科技股回调中跌幅最大
+  4. 固定阈值 80/75 在不同市场状态下表现差异极大
+- `docs/strategy-analysis.md` 新增第九章「基于历史回测数据的优化建议」，含 5 条具体优化方案和 4 阶段迭代路线图。
+- 最高优先级建议：市场状态过滤器（防御/正常两档，影响仓位上限），改动量小、风险可控。

@@ -169,6 +169,17 @@ def _health_html(summary: dict) -> str:
     selected_types = stock_type_filter.get("selected_types") or []
     stock_type_text = "全部" if not selected_types else ",".join(str(item) for item in selected_types)
     stock_type_count = f"{stock_type_filter.get('after_count', sector_rows)}/{stock_type_filter.get('before_count', sector_rows)}"
+    market = summary.get("market_state") or {}
+    market_label = market.get("label", "normal")
+    if market_label == "defensive":
+        market_html = '<span class="chip danger">🔻 防御模式</span>'
+        market_title = f"仓位上限降至{market.get('position_multiplier', 0.6):.0%}。" + str(market.get("note", ""))
+    elif market_label == "normal":
+        market_html = '<span class="chip green">✓ 正常模式</span>'
+        market_title = str(market.get("note", "多数股票在均线上方且趋势上行"))
+    else:
+        market_html = '<span class="chip muted">? 未知</span>'
+        market_title = ""
     issues = health.get("issues") or []
     issue_text = "；".join(str(issue) for issue in issues[:3]) or "当前未发现关键数据问题"
     return f"""
@@ -179,6 +190,7 @@ def _health_html(summary: dict) -> str:
         <span class="muted">用于判断本次结果能否直接用于研究复核</span>
       </div>
       <div class="health-metrics">
+        <div title="{market_title}"><span>市场状态</span><strong>{market_html}</strong></div>
         <div><span>最新行情日</span><strong>{escape(str(latest))}</strong></div>
         <div><span>股票池缺指标</span><strong>{escape(str(sector_missing))}/{escape(str(sector_rows))}</strong></div>
         <div><span>操作建议缺日线</span><strong>{escape(str(plan_missing))}/{escape(str(plan_rows))}</strong></div>
@@ -1464,11 +1476,12 @@ def render_dashboard_html(model: dict) -> str:
     const fineNumberColumns = ["coarse_score","technical_score","close","amount_ratio","ma5","ma10","ma20","macd_hist","rsi14"];
     const planPercentColumns = ["risk_pct","position_cap"];
     const planNumberColumns = ["technical_score","latest_close","planned_entry","initial_stop","take_profit_1r","take_profit_2r"];
-    const macroPotentialThreshold = 80;
-    const technicalTimingThreshold = 75;
     const validationMinCompleteSamples = 5;
     const validationMinSignalDatesForFailure = 3;
     const data = window.DASHBOARD_DATA;
+    const adaptiveThresholds = data.summary.adaptive_thresholds || {{}};
+    const macroPotentialThreshold = adaptiveThresholds.macro_potential_threshold || 80;
+    const technicalTimingThreshold = adaptiveThresholds.technical_timing_threshold || 75;
     const stageFunnel = document.getElementById("stageFunnel");
     const potentialMatrix = document.getElementById("potentialMatrix");
     const matrixSearch = document.getElementById("matrixSearch");
@@ -1883,6 +1896,8 @@ def render_dashboard_html(model: dict) -> str:
     }}
 
     function renderPotentialTiming() {{
+      potentialMatrix.style.setProperty('--macro-threshold', macroPotentialThreshold + '%');
+      potentialMatrix.style.setProperty('--timing-threshold-top', (100 - technicalTimingThreshold) + '%');
       const allCandidates = buildCandidateModels();
       const candidates = filterMatrixCandidates(allCandidates);
       if (selectedCandidateCode && !candidates.some((item) => item.code === selectedCandidateCode)) {{
@@ -1902,8 +1917,8 @@ def render_dashboard_html(model: dict) -> str:
         <div class="quad q2"><strong>低潜力 + 好时机</strong><br>短线强，需复核</div>
         <div class="quad q3"><strong>低潜力 + 差时机</strong><br>暂不关注</div>
         <div class="quad q4"><strong>高潜力 + 差时机</strong><br>加入观察池</div>
-        <div class="axis-x">宏观潜力分，80 为高潜力线 →</div>
-        <div class="axis-y">技术时机分，75 为好时机线 →</div>
+        <div class="axis-x">宏观潜力分，${{macroPotentialThreshold}} 为高潜力线 →</div>
+        <div class="axis-y">技术时机分，${{technicalTimingThreshold}} 为好时机线 →</div>
         ${{points || '<div class="empty">没有匹配的矩阵股票。</div>'}}
       `;
     }}

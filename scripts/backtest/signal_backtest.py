@@ -75,9 +75,9 @@ def _with_attention_score(candidates: pd.DataFrame) -> pd.DataFrame:
     return scored
 
 
-def _matrix_label(macro_score: float, technical_score: float) -> str:
-    macro_high = macro_score >= MACRO_POTENTIAL_THRESHOLD
-    technical_high = technical_score >= TECHNICAL_TIMING_THRESHOLD
+def _matrix_label(macro_score: float, technical_score: float, macro_threshold: float | None = None, tech_threshold: float | None = None) -> str:
+    macro_high = macro_score >= (macro_threshold if macro_threshold is not None else MACRO_POTENTIAL_THRESHOLD)
+    technical_high = technical_score >= (tech_threshold if tech_threshold is not None else TECHNICAL_TIMING_THRESHOLD)
     if macro_high and technical_high:
         return "好时机+高潜力"
     if macro_high:
@@ -87,7 +87,7 @@ def _matrix_label(macro_score: float, technical_score: float) -> str:
     return "其他象限"
 
 
-def _with_matrix_classification(candidates: pd.DataFrame) -> pd.DataFrame:
+def _with_matrix_classification(candidates: pd.DataFrame, macro_threshold: float | None = None, tech_threshold: float | None = None) -> pd.DataFrame:
     scored = candidates.copy()
     macro = _score_series(scored, "combo_score").fillna(_score_series(scored, "coarse_score")).fillna(0)
     macro = macro.where(macro > 1, macro * 100)
@@ -95,7 +95,7 @@ def _with_matrix_classification(candidates: pd.DataFrame) -> pd.DataFrame:
     scored["macro_score"] = macro
     scored["technical_score"] = technical
     scored["matrix_label"] = [
-        _matrix_label(float(macro_value), float(technical_value))
+        _matrix_label(float(macro_value), float(technical_value), macro_threshold=macro_threshold, tech_threshold=tech_threshold)
         for macro_value, technical_value in zip(macro, technical, strict=False)
     ]
     scored["is_high_potential_good_timing"] = scored["matrix_label"] == "好时机+高潜力"
@@ -276,6 +276,8 @@ def build_signal_validation_model(
     signal_date: str,
     holding_days: Iterable[int] = (7, 14, 21),
     bucket_size: int = 10,
+    macro_threshold: float | None = None,
+    tech_threshold: float | None = None,
 ) -> dict:
     """Validate all dashboard candidates by matrix quadrant and attention-score buckets."""
 
@@ -293,7 +295,7 @@ def build_signal_validation_model(
             "attention_buckets": {},
             "rows": [],
         }
-    scored = _with_attention_buckets(_with_matrix_classification(_with_attention_score(candidates)), bucket_size)
+    scored = _with_attention_buckets(_with_matrix_classification(_with_attention_score(candidates), macro_threshold=macro_threshold, tech_threshold=tech_threshold), bucket_size)
     scored["strategy"] = "validation"
     scored["score"] = _score_series(scored, "attention_score")
     returns = compute_forward_returns(scored, quotes, signal_date=signal_date, holding_days=holding_days)
