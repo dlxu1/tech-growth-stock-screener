@@ -74,6 +74,38 @@ class DashboardCliTest(unittest.TestCase):
 
         self.assertEqual(args.universe, "csi300")
 
+    def test_sync_daily_prices_defaults_to_incremental_skip_existing(self) -> None:
+        old_argv = sys.argv[:]
+        try:
+            sys.argv = ["run.py", "sync", "--dataset", "daily_prices", "--codes", "000001", "--start", "2026-01-01", "--end", "2026-07-16"]
+            args = run.parse_args()
+        finally:
+            sys.argv = old_argv
+
+        self.assertTrue(args.skip_existing)
+
+    def test_sync_daily_prices_can_force_full_range(self) -> None:
+        old_argv = sys.argv[:]
+        try:
+            sys.argv = [
+                "run.py",
+                "sync",
+                "--dataset",
+                "daily_prices",
+                "--codes",
+                "000001",
+                "--start",
+                "2026-01-01",
+                "--end",
+                "2026-07-16",
+                "--no-skip-existing",
+            ]
+            args = run.parse_args()
+        finally:
+            sys.argv = old_argv
+
+        self.assertFalse(args.skip_existing)
+
 
 if __name__ == "__main__":
     unittest.main()

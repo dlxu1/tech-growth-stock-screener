@@ -141,18 +141,19 @@ def run_dashboard(args) -> dict:
     sector_result, sector_meta = sector_screen.run(sector_args)
     sector_result = annotate_stock_types(sector_result, stock_type_rules)
     combo_candidates = filter_by_stock_types(sector_result, selected_stock_types)
-    combo, combo_meta = run_combo(combo_args, candidates=combo_candidates)
+    # 提前检测市场状态，传入粗筛阶段做动量防御调整
+    market_state = detect(
+        sector_result["code"].astype(str).str.zfill(6).tolist() if not sector_result.empty else [],
+        as_of_date=getattr(args, "as_of_date", None) or None,
+    )
+    combo, combo_meta = run_combo(combo_args, candidates=combo_candidates, market_state=market_state.regime)
     fine_args.top = len(combo) if not combo.empty else getattr(args, "top", 20)
     fine, fine_meta = run_fine(fine_args, candidates=combo)
     if not combo.empty and not fine.empty and "combo_score" in combo.columns and "combo_score" not in fine.columns:
         combo_scores = combo[["code", "combo_score"]].copy()
         fine = fine.merge(combo_scores, on="code", how="left")
-    market_state = detect(
-        fine["code"].astype(str).str.zfill(6).tolist() if not fine.empty else [],
-        as_of_date=getattr(args, "as_of_date", None) or None,
-    )
-    # 市场状态影响仓位上限：防御模式下 max_position 打折
-    if market_state.label == "defensive":
+    # 防御模式下仓位上限打折
+    if market_state.regime != "bull":
         original_max = getattr(args, "max_position", 0.25) or 0.25
         setattr(args, "max_position", round(original_max * market_state.position_multiplier, 4))
     # 动态阈值：根据当前候选股分数分布自适应象限线
@@ -197,8 +198,11 @@ def run_dashboard(args) -> dict:
     model["summary"]["sector"] = getattr(args, "sector", "") or ""
     model["summary"]["market_state"] = {
         "label": market_state.label,
+        "regime": market_state.regime,
         "median_close_vs_ma20": market_state.median_close_vs_ma20 if pd.notna(market_state.median_close_vs_ma20) else None,
         "median_ma20_slope": market_state.median_ma20_slope if pd.notna(market_state.median_ma20_slope) else None,
+        "breadth_pct": market_state.breadth_pct if pd.notna(market_state.breadth_pct) else None,
+        "bull_votes": market_state.bull_votes,
         "sample_count": market_state.sample_count,
         "position_multiplier": market_state.position_multiplier,
         "note": market_state.note,

@@ -85,6 +85,65 @@ def _rsi(close: pd.Series, window: int = 14) -> float:
     return _last(rsi)
 
 
+def _macd_accelerating(close: pd.Series) -> bool:
+    """Check if MACD histogram is expanding (accelerating divergence, book 4.4)."""
+    clean = pd.to_numeric(close, errors="coerce")
+    if clean.notna().sum() < 2:
+        return False
+    curr = _macd_hist(clean)
+    prev = _macd_hist(clean.iloc[:-1])
+    if pd.isna(curr) or pd.isna(prev):
+        return False
+    return curr > prev
+
+
+def _macd_golden_cross(close: pd.Series) -> bool:
+    """Check if MACD histogram just turned from negative to positive (golden cross)."""
+    clean = pd.to_numeric(close, errors="coerce")
+    if clean.notna().sum() < 2:
+        return False
+    curr = _macd_hist(clean)
+    prev = _macd_hist(clean.iloc[:-1])
+    if pd.isna(curr) or pd.isna(prev):
+        return False
+    return prev <= 0 and curr > 0
+
+
+def _volume_concentration(volume: pd.Series) -> float:
+    """Volume concentration score: recent 5-day volume / 20-day volume (book 4.8)."""
+    clean = pd.to_numeric(volume, errors="coerce").dropna()
+    if len(clean) < 5:
+        return 0.0
+    recent_5 = clean.tail(5).sum()
+    total_20 = clean.tail(20).sum() if len(clean) >= 20 else clean.sum()
+    if total_20 == 0:
+        return 0.0
+    ratio = recent_5 / total_20
+    # ≥ 35% → strong concentration (1.0), 25-35% → moderate (0.5), < 25% → weak (0.0)
+    if ratio >= 0.35:
+        return 1.0
+    elif ratio >= 0.25:
+        return 0.5
+    return 0.0
+
+
+def _turnover_stability(volume: pd.Series, market_cap: float, latest_close: float) -> float:
+    """Turnover stability: 1 - CV(20-day turnover rate), higher = more institutional/stable (book 4.6)."""
+    clean_vol = pd.to_numeric(volume, errors="coerce").dropna().tail(20)
+    if len(clean_vol) < 5 or pd.isna(market_cap) or market_cap <= 0 or pd.isna(latest_close) or latest_close <= 0:
+        return float("nan")
+    total_shares = market_cap / latest_close
+    if total_shares <= 0:
+        return float("nan")
+    turnover = clean_vol / total_shares
+    mean_turnover = turnover.mean()
+    if pd.isna(mean_turnover) or mean_turnover == 0:
+        return 0.0
+    cv = turnover.std(ddof=1) / mean_turnover
+    # Score = 1 - CV, clipped to [0, 1]. Lower CV = higher stability.
+    return max(0.0, 1.0 - min(float(cv), 1.0))
+
+
 def _macd_hist(close: pd.Series) -> float:
     clean = pd.to_numeric(close, errors="coerce")
     if clean.notna().sum() < 2:
@@ -107,6 +166,14 @@ def _atr_pct(group: pd.DataFrame) -> float:
     if pd.isna(latest_close) or latest_close == 0:
         return float("nan")
     return float(_last(atr) / latest_close)
+
+
+def _check_turnover_stability(volume: pd.Series, market_cap: float, latest_close: float) -> float:
+    """Safe wrapper: returns 0.0 when turnover stability cannot be computed."""
+    result = _turnover_stability(volume, market_cap, latest_close)
+    if pd.isna(result):
+        return 0.0
+    return result
 
 
 def _score_component(condition: bool, value: float) -> float:
@@ -176,6 +243,7 @@ def _score_one(candidate: pd.Series, group: pd.DataFrame, min_amount: float) -> 
         group[col] = pd.to_numeric(group[col], errors="coerce")
     close = group["close"]
     amount = group["amount"]
+    volume = group["volume"]
     latest = group.iloc[-1]
     prior_close = close.dropna().iloc[-2] if close.notna().sum() >= 2 else float("nan")
     latest_close = _to_float(latest["close"])
@@ -211,18 +279,23 @@ def _score_one(candidate: pd.Series, group: pd.DataFrame, min_amount: float) -> 
     )
     momentum_score = (
         _score_component(pd.notna(return_20d) and return_20d > 0, 0.40)
-        + _score_component(pd.notna(macd_hist) and macd_hist > 0, 0.35)
+        + _score_component(pd.notna(macd_hist) and macd_hist > 0 and _macd_accelerating(close), 0.20)
+        + _score_component(pd.notna(macd_hist) and macd_hist > 0 and not _macd_accelerating(close), 0.08)
+        + _score_component(_macd_golden_cross(close), 0.07)
         + _score_component(pd.notna(rsi14) and 50 <= rsi14 <= 75, 0.25)
         + _score_component(pd.notna(rsi14) and 45 <= rsi14 < 50, 0.12)
     )
     volume_score = (
-        _score_component(pd.notna(amount_ratio) and amount_ratio >= 1.2, 0.55)
-        + _score_component(pd.notna(change_pct) and change_pct > 0, 0.35)
+        _score_component(pd.notna(amount_ratio) and amount_ratio >= 1.2 and pd.notna(latest_close) and pd.notna(_to_float(latest["open"])) and latest_close > _to_float(latest["open"]), 0.35)
+        + _score_component(pd.notna(amount_ratio) and amount_ratio >= 1.5 and pd.notna(latest_close) and pd.notna(_to_float(latest["open"])) and latest_close > _to_float(latest["open"]), 0.20)
+        + _score_component(pd.notna(change_pct) and change_pct > 0, 0.25)
+        + _score_component(pd.notna(amount_ratio) and amount_ratio > 1 and pd.notna(change_pct) and change_pct > 0 and pd.notna(close_position) and close_position >= 0.5, 0.10)
         + _score_component(pd.notna(amount_20d) and amount_20d >= min_amount, 0.10)
     )
     breakout_score = (
-        _score_component(pd.notna(prev_high20) and latest_close >= prev_high20, 0.55)
-        + _score_component(pd.notna(high20) and high20 > 0 and latest_close / high20 >= 0.98, 0.25)
+        _score_component(pd.notna(prev_high20) and latest_close >= prev_high20, 0.40)
+        + _score_component(pd.notna(high20) and high20 > 0 and latest_close / high20 >= 0.98, 0.15)
+        + _volume_concentration(volume) * 0.25
         + _score_component(pd.notna(close_position) and close_position >= 0.65, 0.20)
     )
     risk_score = (
@@ -230,15 +303,17 @@ def _score_one(candidate: pd.Series, group: pd.DataFrame, min_amount: float) -> 
         + _score_component(pd.notna(drawdown_20d) and -0.15 <= drawdown_20d < -0.08, 0.35)
         + _score_component(pd.notna(atr_pct) and atr_pct <= 0.06, 0.40)
         + _score_component(pd.notna(atr_pct) and 0.06 < atr_pct <= 0.10, 0.20)
+        + _score_component(_check_turnover_stability(volume, _to_float(getattr(candidate, 'market_cap', float('nan'))), latest_close) >= 0.7, 0.30)
+        + _score_component(0.4 <= _check_turnover_stability(volume, _to_float(getattr(candidate, 'market_cap', float('nan'))), latest_close) < 0.7, 0.15)
     )
     liquidity_score = _score_component(pd.notna(amount_20d) and amount_20d >= min_amount, 1.0)
 
     technical_score = (
-        trend_score * 30
-        + min(momentum_score, 1.0) * 20
-        + min(volume_score, 1.0) * 20
+        trend_score * 28
+        + min(momentum_score, 1.0) * 22
+        + min(volume_score, 1.0) * 22
         + min(breakout_score, 1.0) * 15
-        + min(risk_score, 1.0) * 10
+        + min(risk_score, 1.0) * 8
         + liquidity_score * 5
     )
 
@@ -285,7 +360,7 @@ def _score_one(candidate: pd.Series, group: pd.DataFrame, min_amount: float) -> 
 
 def _candidates_from_previous_stage(candidates: pd.DataFrame) -> pd.DataFrame:
     if candidates.empty or "code" not in candidates.columns:
-        return pd.DataFrame(columns=["code", "name", "board_name", "coarse_strategies", "coarse_score"])
+        return pd.DataFrame(columns=["code", "name", "board_name", "coarse_strategies", "coarse_score", "market_cap"])
     out = candidates.copy()
     for col in ["name", "board_name"]:
         if col not in out.columns:
@@ -294,6 +369,8 @@ def _candidates_from_previous_stage(candidates: pd.DataFrame) -> pd.DataFrame:
         out["coarse_strategies"] = out["matched_strategies"] if "matched_strategies" in out.columns else ""
     if "coarse_score" not in out.columns:
         out["coarse_score"] = out["combo_score"] if "combo_score" in out.columns else 0.0
+    if "market_cap" not in out.columns:
+        out["market_cap"] = float("nan")
     grouped = (
         out.groupby("code", as_index=False)
         .agg(
@@ -301,6 +378,7 @@ def _candidates_from_previous_stage(candidates: pd.DataFrame) -> pd.DataFrame:
             board_name=("board_name", "first"),
             coarse_strategies=("coarse_strategies", lambda values: ",".join(dict.fromkeys(values.astype(str)))),
             coarse_score=("coarse_score", "max"),
+            market_cap=("market_cap", "first"),
         )
     )
     return grouped

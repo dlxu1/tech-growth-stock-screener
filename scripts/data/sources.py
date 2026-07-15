@@ -11,7 +11,7 @@ import math
 import re
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -20,6 +20,9 @@ import requests
 
 from common import cache_dir, db_path, find_col, normalize_code, report_date_candidates, source_chain, to_number
 from data.db import connect, read_cached_source, write_index_constituents, write_quotes_daily, write_source_table
+
+
+FINANCIAL_AUTO_MIN_ROWS = 3000
 
 
 def run_fetchers(label: str, fetchers: list[tuple[str, Callable[[], pd.DataFrame]]]) -> tuple[pd.DataFrame, str]:
@@ -310,27 +313,31 @@ def _cached_financial_report_table(report_date: str, as_of_date: str | None = No
     try:
         rows = conn.execute(
             """
-            select table_key
+            select table_key, row_count
             from cache_meta
             where table_key like 'stock_yjbb_%' and status='ok'
             order by table_key desc
             """
         ).fetchall()
-        report_dates = []
-        for (table_key,) in rows:
+        report_dates: list[tuple[str, int]] = []
+        for table_key, row_count in rows:
             match = re.fullmatch(r"stock_yjbb_(\d{8})", str(table_key))
             if match:
-                report_dates.append(match.group(1))
+                report_dates.append((match.group(1), int(row_count or 0)))
         if not report_dates:
             return None
         if report_date != "auto":
-            selected = report_date if report_date in report_dates else ""
+            selected = report_date if any(date_value == report_date for date_value, _row_count in report_dates) else ""
         elif as_of_date:
-            selected = next((date_value for date_value in sorted(report_dates, reverse=True) if date_value <= as_of_date.replace("-", "")), "")
+            candidates = [(date_value, row_count) for date_value, row_count in sorted(report_dates, reverse=True) if date_value <= as_of_date.replace("-", "")]
+            selected = next((date_value for date_value, row_count in candidates if row_count >= FINANCIAL_AUTO_MIN_ROWS), "")
             if not selected:
-                selected = max(report_dates)
+                selected = candidates[0][0] if candidates else max(date_value for date_value, _row_count in report_dates)
         else:
-            selected = max(report_dates)
+            candidates = sorted(report_dates, reverse=True)
+            selected = next((date_value for date_value, row_count in candidates if row_count >= FINANCIAL_AUTO_MIN_ROWS), "")
+            if not selected:
+                selected = candidates[0][0]
         if not selected:
             return None
         table_key = f"stock_yjbb_{selected}"
@@ -347,6 +354,7 @@ def load_financial_report(report_date: str, refresh: bool, source: str, no_proxy
 
     candidates = financial_report_candidates(report_date, as_of_date=as_of_date)
     errors = []
+    first_incomplete: tuple[pd.DataFrame, str, str] | None = None
     for rd in candidates:
         try:
             def _fetch(rd=rd) -> tuple[pd.DataFrame, str]:
@@ -360,9 +368,16 @@ def load_financial_report(report_date: str, refresh: bool, source: str, no_proxy
 
             df, chosen_source = cached_source_table(f"stock_yjbb_{rd}", f"stock_yjbb_em_{rd}.csv", refresh, _fetch)
             if not df.empty:
+                if report_date == "auto" and len(df) < FINANCIAL_AUTO_MIN_ROWS:
+                    if first_incomplete is None:
+                        first_incomplete = (df, rd, chosen_source)
+                    errors.append(f"{rd}: incomplete financial report rows={len(df)} < {FINANCIAL_AUTO_MIN_ROWS}")
+                    continue
                 return df, rd, chosen_source
         except Exception as exc:
             errors.append(f"{rd}: {exc}")
+    if first_incomplete is not None:
+        return first_incomplete
     if source == "cache" and not refresh:
         cached = _cached_financial_report_table(report_date, as_of_date=as_of_date)
         if cached is not None:
@@ -620,7 +635,23 @@ def cached_daily_prices_cover_range(conn, code: str, start: str, end: str) -> tu
     ).fetchone()
     first_date, last_date, rows = row if row else (None, None, 0)
     covered = bool(rows and first_date and last_date and first_date <= start and last_date >= end)
-    return covered, {"cached_rows": int(rows or 0), "cached_start": first_date, "cached_end": last_date}
+    fetch_start = start
+    incremental = False
+    if rows and first_date and last_date and first_date <= start and last_date < end:
+        try:
+            next_date = (date.fromisoformat(str(last_date)) + timedelta(days=1)).isoformat()
+            if next_date <= end:
+                fetch_start = next_date
+                incremental = True
+        except ValueError:
+            pass
+    return covered, {
+        "cached_rows": int(rows or 0),
+        "cached_start": first_date,
+        "cached_end": last_date,
+        "fetch_start": fetch_start,
+        "incremental": incremental,
+    }
 
 
 def sync_daily_prices(
@@ -631,7 +662,7 @@ def sync_daily_prices(
     no_proxy: bool,
     source: str,
     adjust: str,
-    skip_existing: bool = False,
+    skip_existing: bool = True,
 ) -> dict:
     if not codes:
         raise RuntimeError("daily_prices sync requires at least one code")
@@ -641,13 +672,18 @@ def sync_daily_prices(
     try:
         normalized_codes = [normalize_code(c) for c in codes if str(c).strip()]
         for idx, code in enumerate(normalized_codes, start=1):
-            if skip_existing:
+            fetch_start = start
+            fetch_end = end
+            cache_info: dict = {}
+            if skip_existing and not refresh:
                 covered, cache_info = cached_daily_prices_cover_range(conn, code, start, end)
                 if covered:
                     print(f"[daily_prices] {idx}/{len(normalized_codes)} skipping {code} (cached)", file=sys.stderr, flush=True)
                     per_symbol.append({"code": code, "rows": 0, "status": "skipped", **cache_info})
                     continue
-            print(f"[daily_prices] {idx}/{len(normalized_codes)} syncing {code}", file=sys.stderr, flush=True)
+                fetch_start = str(cache_info.get("fetch_start") or start)
+            range_note = f" {fetch_start}..{fetch_end}" if fetch_start != start else ""
+            print(f"[daily_prices] {idx}/{len(normalized_codes)} syncing {code}{range_note}", file=sys.stderr, flush=True)
             fetchers: list[tuple[str, Callable[[], pd.DataFrame]]] = []
             if source == "cache":
                 legacy_path = cache_dir() / f"daily_prices_{code}.csv"
@@ -655,22 +691,30 @@ def sync_daily_prices(
                     fetchers.append((f"legacy-csv:daily_prices_{code}.csv", lambda legacy_path=legacy_path: pd.read_csv(legacy_path, dtype={"code": str})))
             for name in source_chain(source, ["efinance", "akshare", "sina", "baostock"]):
                 if name == "efinance":
-                    fetchers.append(("efinance-history", lambda code=code: fetch_daily_prices_efinance(code, start, end, adjust, no_proxy)))
+                    fetchers.append(("efinance-history", lambda code=code, fetch_start=fetch_start, fetch_end=fetch_end: fetch_daily_prices_efinance(code, fetch_start, fetch_end, adjust, no_proxy)))
                 elif name == "akshare":
-                    fetchers.append(("akshare-hist", lambda code=code: fetch_daily_prices_akshare(code, start, end, adjust, no_proxy)))
+                    fetchers.append(("akshare-hist", lambda code=code, fetch_start=fetch_start, fetch_end=fetch_end: fetch_daily_prices_akshare(code, fetch_start, fetch_end, adjust, no_proxy)))
                 elif name == "sina":
-                    fetchers.append(("sina-daily", lambda code=code: fetch_daily_prices_sina(code, start, end, adjust, no_proxy)))
+                    fetchers.append(("sina-daily", lambda code=code, fetch_start=fetch_start, fetch_end=fetch_end: fetch_daily_prices_sina(code, fetch_start, fetch_end, adjust, no_proxy)))
                 elif name == "baostock":
-                    fetchers.append(("baostock-history", lambda code=code: fetch_daily_prices_baostock(code, start, end, adjust, no_proxy)))
+                    fetchers.append(("baostock-history", lambda code=code, fetch_start=fetch_start, fetch_end=fetch_end: fetch_daily_prices_baostock(code, fetch_start, fetch_end, adjust, no_proxy)))
             try:
                 raw, used_source = run_fetchers(f"daily prices for {code}", fetchers)
-                raw_key = f"daily_prices_{code}_{start}_{end}_{adjust or 'none'}"
+                raw_key = f"daily_prices_{code}_{fetch_start}_{fetch_end}_{adjust or 'none'}"
                 write_source_table(conn, raw_key, used_source, raw)
                 normalized = normalize_daily_prices(raw, code, used_source)
-                normalized = normalized[(normalized["trade_date"] >= start) & (normalized["trade_date"] <= end)].copy()
+                normalized = normalized[(normalized["trade_date"] >= fetch_start) & (normalized["trade_date"] <= fetch_end)].copy()
                 rows = write_quotes_daily(conn, normalized, used_source)
                 normalized_frames.append(normalized)
-                per_symbol.append({"code": code, "source": used_source, "rows": rows, "status": "ok"})
+                per_symbol.append({
+                    "code": code,
+                    "source": used_source,
+                    "rows": rows,
+                    "status": "ok",
+                    **cache_info,
+                    "fetch_start": fetch_start,
+                    "fetch_end": fetch_end,
+                })
             except Exception as exc:
                 per_symbol.append({"code": code, "rows": 0, "status": "error", "error": str(exc)})
                 if refresh:
@@ -703,7 +747,7 @@ def sync_dataset(
     end: str | None = None,
     adjust: str = "qfq",
     index_symbol: str = "000300",
-    skip_existing: bool = False,
+    skip_existing: bool = True,
 ) -> dict:
     if dataset == "spot":
         df, used_source = load_spot(refresh, no_proxy, source)

@@ -72,6 +72,7 @@ def _health_score(issue_count: int, coverage: dict, serial_ok: bool, freshness: 
     if not serial_ok:
         score -= 25
     score -= min(25, int(coverage["sector_quote_metric_missing_ratio"] * 25))
+    score -= min(25, int(coverage["combo_score_missing_ratio"] * 35))
     score -= min(25, int(coverage["plan_missing_quotes_ratio"] * 35))
     if freshness.get("lag_days") is not None:
         score -= min(15, max(0, int(freshness["lag_days"])) * 5)
@@ -104,6 +105,7 @@ def audit_dashboard_model(model: dict, expected_latest_trade_date: str | None = 
         for row in sector_rows
         if any(_missing(row.get(col)) for col in ["amount_20d", "return_60d", "max_drawdown_252d"])
     )
+    combo_score_missing = sum(1 for row in combo_rows if _as_float(row.get("combo_score")) is None)
     plan_missing_quotes = sum(1 for row in plan_rows if row.get("data_status") == "missing_quotes")
     plan_usable = sum(1 for row in plan_rows if bool(row.get("usable_for_plan")))
     plan_complete_price_missing = sum(
@@ -115,6 +117,9 @@ def audit_dashboard_model(model: dict, expected_latest_trade_date: str | None = 
         "sector_rows": len(sector_rows),
         "sector_quote_metric_missing": sector_quote_metric_missing,
         "sector_quote_metric_missing_ratio": sector_quote_metric_missing / len(sector_rows) if sector_rows else 0,
+        "combo_rows": len(combo_rows),
+        "combo_score_missing": combo_score_missing,
+        "combo_score_missing_ratio": combo_score_missing / len(combo_rows) if combo_rows else 0,
         "plan_rows": len(plan_rows),
         "plan_usable": plan_usable,
         "plan_usable_ratio": plan_usable / len(plan_rows) if plan_rows else 0,
@@ -149,6 +154,8 @@ def audit_dashboard_model(model: dict, expected_latest_trade_date: str | None = 
         issues.append("阶段串行关系异常：存在下游股票不在上游结果中")
     if coverage["sector_quote_metric_missing"]:
         issues.append(f"股票池行情指标缺失：{coverage['sector_quote_metric_missing']}/{coverage['sector_rows']}")
+    if coverage["combo_score_missing"]:
+        issues.append(f"宏观粗筛分缺失：{coverage['combo_score_missing']}/{coverage['combo_rows']}")
     if coverage["plan_missing_quotes"]:
         issues.append(f"操作建议缺日线行情：{coverage['plan_missing_quotes']}/{coverage['plan_rows']}")
     if coverage["plan_complete_price_missing"]:
@@ -185,6 +192,7 @@ def render_health_markdown(audit: dict) -> str:
     lines.extend(
         [
             f"股票池行情指标缺失：{coverage.get('sector_quote_metric_missing', 0)}/{coverage.get('sector_rows', 0)}",
+            f"宏观粗筛分缺失：{coverage.get('combo_score_missing', 0)}/{coverage.get('combo_rows', 0)}",
             f"操作建议可执行：{coverage.get('plan_usable', 0)}/{coverage.get('plan_rows', 0)}",
             f"操作建议缺日线行情：{coverage.get('plan_missing_quotes', 0)}/{coverage.get('plan_rows', 0)}",
             f"阶段串行关系：{'通过' if audit.get('serial', {}).get('ok') else '异常'}",

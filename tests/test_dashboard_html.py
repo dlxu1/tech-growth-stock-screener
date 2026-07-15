@@ -550,8 +550,9 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("score-info", html)
         self.assertIn('id="scoreTooltip"', html)
         self.assertIn("data-score-help", html)
-        self.assertIn("宏观粗筛分 = 多策略共振分 × 35%", html)
-        self.assertIn("细筛分 = 趋势分 × 30", html)
+        self.assertIn("宏观粗筛分会随市场状态切换权重", html)
+        self.assertIn("质量分 = 行业内 ROE 排名 × 40%", html)
+        self.assertIn("细筛分 = 趋势分 × 28", html)
         self.assertIn("京东方A", html)
         self.assertIn("window.DASHBOARD_DATA", html)
 

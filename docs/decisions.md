@@ -237,6 +237,26 @@ Implication: do not silence underperformance. Prefer `signal-validate` with
 `--validation-start`, `--validation-end`, and `--validation-step-days` when
 deciding whether a scoring signal is genuinely failing.
 
+## 2026-07-16: Data Updates Default To Incremental
+
+Decision: daily-price sync defaults to incremental `skip_existing` behavior at
+both the CLI and data-source function layers. A normal "更新数据" operation should
+fill only missing daily-price tails and should not pass `--refresh` or
+`--no-skip-existing` unless a full rebuild is explicitly requested. Financial
+report `auto` selection prefers the latest complete-looking report table and
+skips obviously incomplete fresh quarters when a complete cached/fetched
+candidate is available.
+
+Reason: repeated full-universe daily-price refreshes are slow, unnecessary, and
+increase the chance of upstream throttling or partial overwrites. Incomplete
+new financial quarters can distort stock-pool and macro scores by silently
+shrinking the financial universe.
+
+Implication: future data-update commands should rely on default incremental
+daily-price sync and cache freshness checks. Use `--no-skip-existing`,
+`--refresh`, or `--update-policy refresh` only for deliberate data repair or
+full rebuild tasks.
+
 ## 2026-07-12: 数据回测 Uses Single-Date Fixed Holding Signals
 
 Decision: the new signal backtest module selects the top 10 stocks from the
@@ -339,25 +359,28 @@ trading days when intraday sequencing is unknown.
 
 ## 2026-07-13: 市场状态过滤器
 
-Decision: 在 dashboard pipeline 中新增市场状态检测模块 `scripts/dashboard/market_state.py`。在 fine 阶段完成后、操作建议生成前，用 fine 候选股的日线数据中位数判定当前市场处于 NORMAL 还是 DEFENSIVE 状态。
+Decision: 在 dashboard pipeline 中新增市场状态检测模块 `scripts/dashboard/market_state.py`。当前实现是在股票池阶段完成后、combo 阶段前，用候选样本的日线中位数和宽度判定当前市场处于 bull、transition 还是 bear。
 
 判定规则：
-- 中位收盘价/MA20 > 1.0 且中位 MA20 斜率 > 0 → NORMAL
-- 任一条件不满足 → DEFENSIVE
+- 样本中位 close/MA30 > 1.0 → 1 张牛市票
+- 样本宽度（close/MA20 > 1 的股票占比）> 60% → 1 张牛市票
+- 样本中位 MA20 斜率 > 0 → 1 张牛市票
+- 3/3 → bull；1/3 或 2/3 → transition；0/3 → bear
 
-DEFENSIVE 状态下的影响：
-- `max_position`（仓位上限）乘以 0.60 折扣系数
+非 bull 状态下的影响：
+- `max_position`（仓位上限）按状态乘以 0.85 或 0.60
 - 通过 `setattr(args, "max_position", ...)` 传递，不修改 trade_plan 代码
+- market regime 传入 `run_combo()`，直接改变 `momentum_score` 组成和 `combo_score` 权重
 
 市场状态信息通过 `model["summary"]["market_state"]` 暴露给看板和 API。
 
 Reason: 2026-06-30 回测数据表明，在市场整体下跌期间（中位股票在 MA20 下方且 MA20 下行），当前评分体系选出的高分股（前期涨幅大的科技股）反而跌幅最大。在市场下行期自动降仓位可以保护本金，这是最轻量的防御性改动。
 
 Implication:
-- 不修改任何评分公式或因子权重
-- 不影响 combo_score 和 technical_score 的计算
+- 市场状态现在会影响 combo_score；复盘分布时必须按 bull/transition/bear 分开看
+- technical_score 的计算不受市场状态影响
 - 市场状态通过已有的 args 对象传递，trade_plan 无需感知
-- future: 可以在 DEFENSIVE 状态下进一步降低 momentum_score 权重，或调整操作建议的策略偏好
+- 无候选股、缺少日线或有效样本不足时仍默认 bull，避免离线缓存不完整时误触发防御
 
 ## 2026-07-13: 行业中性化
 
@@ -385,3 +408,39 @@ Implication:
 - 历史回测中的 `signal-validate` 和 `operation-backtest` 也受益于动态阈值
 - HTML 轴标签动态显示当前阈值
 - 阈值的分位数参数（70/65）可通过 `compute_dynamic_thresholds` 的参数调整
+
+## 2026-07-15: PEG 因子 + 动量/反转 + 技术面信号精细化（濮元恺《量化投资技术分析实战》）
+
+### 宏观粗筛改动
+
+1. **PEG 因子替换 PE 合理度**：`quality_score` 中 PE 合理度（25%）替换为 PEG 评分（35%），权重调整为 ROE(40%) + gross_margin(25%) + PEG(35%)。PEG = PE / max(growth_pct, 1)，其中 growth_pct 对 `20.0` 百分数单位和 `0.20` 小数比例单位自适应，映射到 0-1 分。
+
+2. **动量分解为趋势动量 + 均值反转**：`momentum_score` 从单一 return_60d rank 改为 return_60d_rank(55%) + mean_reversion_score(45%)。反转信号仅在 revenue_yoy>0 且 profit_yoy>0 时生效，回撤越深反转分越高；同时用 return_60d 因子惩罚已经明显反弹的股票，避免把“已完成反转”误计成高反转潜力。
+
+3. **combo_score 权重调整**：overlap 35→30, growth 20→22, quality 18→20, risk_control 15→13, liquidity 7→7, momentum 5→8。
+
+### 技术细筛改动
+
+4. **量价配合确认**：`volume_score` 从简单的量比+涨跌改为放量阳线(35%) + 显著放量阳线(20%) + 上涨(25%) + 量价配合(10%) + 流动性(10%)。
+
+5. **MACD 信号精细化**：MACD 柱加速扩大→20%、MACD 柱缩小→8%、金叉→7%，替代原来笼统的 hist>0 给 35%。
+
+6. **筹码集中度**：`breakout_score` 加入 volume_concentration 因子（近 5 日量/近 20 日量），≥35% 为强筹码堆积。
+
+7. **换手率稳定性**：`risk_score` 加入 turnover_stability（1-CV(20日换手率)），低 CV=机构持仓特征。换手率通过 volume × close / market_cap 近似计算。
+
+8. **technical_score 权重调整**：trend 30→28, momentum 20→22, volume 20→22, breakout 15→15, risk 10→8, liquidity 5→5。
+
+### 数据支撑
+
+- PEG/动量/反转/MACD/量价/筹码集中度：现有 quotes_daily 数据足够
+- 换手率稳定性：通过 volume × close / market_cap 推导 total_shares，在 fine 阶段计算
+- `fine/repository.py` 和 `_candidates_from_previous_stage` 新增 market_cap 穿透
+
+### 依据
+
+- 4.3 PEG 价值选股模型（彼得·林奇路径）
+- 4.5 动量效应和反转效应
+- 4.6 换手率和资金流模型（主力和筹码盘根错节）
+- 4.8 聪明钱因子模型（低 CV 换手率近似机构行为）
+- 4.4 技术指标测试平台（多指标验证、MACD 发散检测）

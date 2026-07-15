@@ -12,7 +12,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from strategies.fine.technical import run
+from strategies.fine.technical import _score_one, run
 
 
 class FineSerialFlowTest(unittest.TestCase):
@@ -64,6 +64,34 @@ class FineSerialFlowTest(unittest.TestCase):
             run(args, candidates=candidates)
 
         load_quotes.assert_called_once_with(["000001"], as_of_date="2026-06-28")
+
+    def test_volume_concentration_strength_changes_technical_score(self) -> None:
+        candidate = pd.Series(
+            {
+                "code": "000001",
+                "name": "宏观入选",
+                "board_name": "半导体",
+                "coarse_strategies": "多策略共振",
+                "coarse_score": 88.5,
+            }
+        )
+        base = pd.DataFrame(
+            {
+                "trade_date": pd.date_range("2026-01-01", periods=20).strftime("%Y-%m-%d"),
+                "open": [10 + i for i in range(20)],
+                "high": [10.5 + i for i in range(20)],
+                "low": [9.5 + i for i in range(20)],
+                "close": [10.2 + i for i in range(20)],
+                "amount": [100000000] * 20,
+            }
+        )
+        moderate_volume = [70 / 15] * 15 + [6] * 5
+        strong_volume = [50 / 15] * 15 + [10] * 5
+
+        moderate = _score_one(candidate, base.assign(volume=moderate_volume), min_amount=20000000)
+        strong = _score_one(candidate, base.assign(volume=strong_volume), min_amount=20000000)
+
+        self.assertGreater(strong["technical_score"], moderate["technical_score"])
 
 
 if __name__ == "__main__":

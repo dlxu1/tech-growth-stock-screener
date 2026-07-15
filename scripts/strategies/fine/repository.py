@@ -28,6 +28,7 @@ def coarse_candidates(args) -> tuple[pd.DataFrame, dict]:
             board_name=("board_name", "first"),
             coarse_strategies=("coarse_strategy", lambda values: ",".join(dict.fromkeys(values.astype(str)))),
             coarse_score=("coarse_score", "max"),
+            market_cap=("market_cap", "first"),
         )
     )
     return grouped, meta

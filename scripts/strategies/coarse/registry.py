@@ -57,6 +57,42 @@ def _reasonable_pe_score(series: pd.Series) -> pd.Series:
     return (1 - distance / 2).fillna(0.5)
 
 
+def _peg_score(pe_series: pd.Series, revenue_yoy: pd.Series, profit_yoy: pd.Series) -> pd.Series:
+    """PEG scoring: PE / growth rate, lower PEG = better value (book 4.3)."""
+    pe = pd.to_numeric(pe_series, errors="coerce")
+    ry = pd.to_numeric(revenue_yoy, errors="coerce")
+    py = pd.to_numeric(profit_yoy, errors="coerce")
+    # Data sources may store YoY as either 20.0 percent or 0.20 ratio.
+    growth = (ry.clip(lower=0) + py.clip(lower=0)) / 2
+    growth = growth.where(growth > 1.0, growth * 100)
+    growth = growth.clip(lower=1.0)  # floor at 1%
+    peg = pe / growth
+    # Map PEG to score: <0.5 deep undervalue → 1.0, 0.5-1.0 reasonable → 0.85-1.0,
+    # 1.0-2.0 acceptable → 0.4-0.85, >2.0 expensive → 0-0.4
+    score = peg.apply(lambda x: 1.0 if x < 0.5 else (1.0 - (x - 0.5) * 0.3) if x < 1.0 else (0.85 - (x - 1.0) * 0.45) if x < 2.0 else (0.4 - (x - 2.0) * 0.1))
+    return score.fillna(0.5).clip(0.0, 1.0)
+
+
+def _mean_reversion_score(return_60d: pd.Series, max_drawdown_252d: pd.Series, revenue_yoy: pd.Series, profit_yoy: pd.Series) -> pd.Series:
+    """Mean reversion score: deep drawdown stocks with solid fundamentals get higher score (book 4.5)."""
+    ret = pd.to_numeric(return_60d, errors="coerce")
+    # Use 60d return as proxy: negative return = potential reversal
+    dd = pd.to_numeric(max_drawdown_252d, errors="coerce")
+    ry = pd.to_numeric(revenue_yoy, errors="coerce")
+    py = pd.to_numeric(profit_yoy, errors="coerce")
+    # Only apply mean reversion to stocks with positive fundamentals
+    has_fundamentals = (ry.fillna(0) > 0) & (py.fillna(0) > 0)
+    # Reversal potential: deeper drawdown + negative momentum → higher reversal score
+    # Map: dd < -25% → 1.0, -25% to -15% → 0.5-0.8, -15% to -10% → 0.2-0.5, > -10% → 0-0.2
+    score = dd.abs().apply(lambda x: 1.0 if x > 0.25 else (0.5 + (x - 0.15) / 0.10 * 0.3) if x > 0.15 else (0.2 + (x - 0.10) / 0.05 * 0.3) if x > 0.10 else (x / 0.10 * 0.2))
+    negative_factor = 0.6 + ((-ret).clip(lower=0.0, upper=0.15) / 0.15 * 0.4)
+    positive_factor = 0.5 - (ret.clip(lower=0.0, upper=0.20) / 0.20 * 0.3)
+    momentum_factor = negative_factor.where(ret.fillna(0.0) <= 0.0, positive_factor).fillna(0.5)
+    score = score * momentum_factor
+    score = score.where(has_fundamentals, 0.0)
+    return score.fillna(0.0).clip(0.0, 1.0)
+
+
 def _positive(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(0) > 0
 
@@ -450,7 +486,7 @@ def _base_for_combo(args, candidates: pd.DataFrame | None = None) -> tuple[pd.Da
     return filtered, meta
 
 
-def run_combo(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
+def run_combo(args, candidates: pd.DataFrame | None = None, market_state: str | None = None) -> tuple[pd.DataFrame, dict]:
     base, meta = _base_for_combo(args, candidates)
     if base.empty:
         meta.update({"strategy": "potential_combo", "top": args.top, "selected": 0})
@@ -473,16 +509,26 @@ def run_combo(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFram
     base_scored["growth_score"] = _rank_high(_metric(base_scored, "revenue_yoy").clip(lower=0) + _metric(base_scored, "profit_yoy").clip(lower=0)) * 100
     _industry_groups = safe_group_column(base_scored)
     base_scored["quality_score"] = (
-        _rank_high_within_group(_metric(base_scored, "roe"), _industry_groups) * 0.45
-        + _rank_high_within_group(_metric(base_scored, "gross_margin"), _industry_groups) * 0.30
-        + _reasonable_pe_score(_metric(base_scored, "pe")) * 0.25
+        _rank_high_within_group(_metric(base_scored, "roe"), _industry_groups) * 0.40
+        + _rank_high_within_group(_metric(base_scored, "gross_margin"), _industry_groups) * 0.25
+        + _peg_score(_metric(base_scored, "pe"), _metric(base_scored, "revenue_yoy"), _metric(base_scored, "profit_yoy")) * 0.35
     ) * 100
     base_scored["risk_control_score"] = (
         _rank_low_within_group(_metric(base_scored, "max_drawdown_252d").abs(), _industry_groups) * 0.70
         + _rank_high(_metric(base_scored, "amount_20d")) * 0.30
     ) * 100
     base_scored["liquidity_score"] = _rank_high(_metric(base_scored, "amount_20d")) * 100
-    base_scored["momentum_score"] = _rank_high(_metric(base_scored, "return_60d")) * 100
+    # Momentum score: composition varies by market regime
+    _trend_momentum = _rank_high(_metric(base_scored, "return_60d"))
+    _reversion = _mean_reversion_score(
+        _metric(base_scored, "return_60d"),
+        _metric(base_scored, "max_drawdown_252d"),
+        _metric(base_scored, "revenue_yoy"),
+        _metric(base_scored, "profit_yoy"),
+    )
+    base_scored["_trend_momentum"] = _trend_momentum
+    base_scored["_mean_reversion"] = _reversion
+    base_scored["momentum_score"] = (_trend_momentum * 0.55 + _reversion * 0.45) * 100
 
     total_weight = sum(POTENTIAL_COMBO_STRATEGY_WEIGHTS.values())
     if hits.empty:
@@ -504,14 +550,50 @@ def run_combo(args, candidates: pd.DataFrame | None = None) -> tuple[pd.DataFram
         base_scored["matched_strategies"] = base_scored["matched_strategies"].fillna("")
         base_scored["overlap_score"] = base_scored["overlap_score"].fillna(0.0)
 
+    trend_momentum = pd.to_numeric(base_scored["_trend_momentum"], errors="coerce").fillna(0.0)
+    reversion = pd.to_numeric(base_scored["_mean_reversion"], errors="coerce").fillna(0.0)
     base_scored["combo_score"] = (
-        base_scored["overlap_score"] * 0.35
-        + base_scored["growth_score"] * 0.20
-        + base_scored["quality_score"] * 0.18
-        + base_scored["risk_control_score"] * 0.15
+        base_scored["overlap_score"] * 0.30
+        + base_scored["growth_score"] * 0.22
+        + base_scored["quality_score"] * 0.20
+        + base_scored["risk_control_score"] * 0.13
         + base_scored["liquidity_score"] * 0.07
-        + base_scored["momentum_score"] * 0.05
+        + base_scored["momentum_score"] * 0.08
     )
+    # 双策略自动切换：根据市场状态重新计算 combo_score
+    if market_state == "bull":
+        # 牛市：动量权重放大，追强势股
+        base_scored["momentum_score"] = (trend_momentum * 0.70 + reversion * 0.30) * 100
+        base_scored["combo_score"] = (
+            base_scored["overlap_score"] * 0.30
+            + base_scored["growth_score"] * 0.20
+            + base_scored["quality_score"] * 0.15
+            + base_scored["risk_control_score"] * 0.10
+            + base_scored["liquidity_score"] * 0.05
+            + base_scored["momentum_score"] * 0.20
+        )
+    elif market_state == "bear":
+        # 熊市：动量归零，质量因子主导
+        base_scored["momentum_score"] = reversion * 100
+        base_scored["combo_score"] = (
+            base_scored["overlap_score"] * 0.25
+            + base_scored["growth_score"] * 0.22
+            + base_scored["quality_score"] * 0.30
+            + base_scored["risk_control_score"] * 0.18
+            + base_scored["liquidity_score"] * 0.05
+            + base_scored["momentum_score"] * 0.00
+        )
+    else:
+        # transition: 保持 defense 模式（动量 3.2%，质量增强）
+        base_scored["momentum_score"] = (trend_momentum * 0.30 + reversion * 0.70) * 100
+        base_scored["combo_score"] = (
+            base_scored["overlap_score"] * 0.30
+            + base_scored["growth_score"] * 0.23
+            + base_scored["quality_score"] * 0.248
+            + base_scored["risk_control_score"] * 0.148
+            + base_scored["liquidity_score"] * 0.07
+            + base_scored["momentum_score"] * 0.032
+        )
     base_scored["risk_flags"] = base_scored.apply(_row_risk_flags, axis=1)
     base_scored["combo_reason"] = base_scored.apply(_combo_reason, axis=1)
     data_notes = []

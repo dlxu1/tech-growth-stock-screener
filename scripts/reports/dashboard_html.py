@@ -121,23 +121,22 @@ SCORE_HELP = {
     },
     "combo": {
         "combo_score": (
-            "宏观粗筛分 = 多策略共振分 × 35% + 成长分 × 20% + 质量分 × 18% + "
-            "风控分 × 15% + 流动性分 × 7% + 动量分 × 5%。多策略共振分 = "
-            "命中策略权重 / 总策略权重 × 100；成长分来自营收同比和净利润同比的正向排名；"
-            "质量分来自 ROE、毛利率和 PE 合理度；风控分来自最大回撤和成交额。"
+            "宏观粗筛分会随市场状态切换权重。基础权重为多策略共振分 × 30% + 成长分 × 22% + "
+            "质量分 × 20% + 风控分 × 13% + 流动性分 × 7% + 动量分 × 8%。"
+            "牛市提高动量权重；震荡市偏向质量和反转；熊市动量不参与总分。"
         ),
         "overlap_score": "多策略共振分 = 命中策略权重 / 总策略权重 × 100。命中越多高权重粗筛策略，分数越高。",
         "growth_score": "成长分 = 营收同比和净利润同比正值相加后做百分位排名，再 × 100。",
-        "quality_score": "质量分 = ROE排名 × 45% + 毛利率排名 × 30% + PE合理度 × 25%，再 × 100。",
+        "quality_score": "质量分 = 行业内 ROE 排名 × 40% + 行业内毛利率排名 × 25% + PEG 评分 × 35%，再 × 100。",
         "risk_control_score": "风控分 = 最大回撤绝对值低排名 × 70% + 20日成交额排名 × 30%，再 × 100。",
         "liquidity_score": "流动性分 = 20日成交额在基础股票池中的百分位排名 × 100。",
-        "momentum_score": "动量分 = 60日涨幅在基础股票池中的百分位排名 × 100。",
+        "momentum_score": "动量分 = 60日趋势动量排名与均值反转分的组合；反转分要求基本面正增长，并会惩罚已明显反弹的股票。",
         "strategy_summary": "策略命中 = 该股票进入了多少个宏观粗筛子策略。命中策略数越多，说明多维度共振越强；命中策略的权重会进一步换算为多策略共振分。",
     },
     "fine": {
         "technical_score": (
-            "细筛分 = 趋势分 × 30 + 动量分 × 20 + 量能分 × 20 + 突破分 × 15 + "
-            "风险分 × 10 + 流动性分 × 5。趋势看均线多头和20日均线上行；动量看20日涨幅、MACD和RSI；"
+            "细筛分 = 趋势分 × 28 + 动量分 × 22 + 量能分 × 22 + 突破分 × 15 + "
+            "风险分 × 8 + 流动性分 × 5。趋势看均线多头和20日均线上行；动量看20日涨幅、MACD和RSI；"
             "量能看成交额放大、当日上涨和20日成交额门槛；突破看20日新高附近和收盘位置；风险看20日回撤和ATR。"
         ),
         "coarse_score": "粗筛分 = 进入技术细筛前的宏观/粗筛阶段得分，用作技术分相同或接近时的次级排序依据。",
@@ -161,6 +160,8 @@ def _health_html(summary: dict) -> str:
     latest = freshness.get("latest_trade_date") or "N/A"
     sector_missing = coverage.get("sector_quote_metric_missing", 0)
     sector_rows = coverage.get("sector_rows", 0)
+    combo_missing = coverage.get("combo_score_missing", 0)
+    combo_rows = coverage.get("combo_rows", 0)
     plan_missing = coverage.get("plan_missing_quotes", 0)
     plan_rows = coverage.get("plan_rows", 0)
     plan_usable = coverage.get("plan_usable", 0)
@@ -170,16 +171,38 @@ def _health_html(summary: dict) -> str:
     stock_type_text = "全部" if not selected_types else ",".join(str(item) for item in selected_types)
     stock_type_count = f"{stock_type_filter.get('after_count', sector_rows)}/{stock_type_filter.get('before_count', sector_rows)}"
     market = summary.get("market_state") or {}
-    market_label = market.get("label", "normal")
-    if market_label == "defensive":
+    market_label = market.get("label", "bull")
+    market_regime = market.get("regime", market_label)
+    market_bull_votes = market.get("bull_votes", 0)
+    market_breadth = market.get("breadth_pct")
+    market_note = str(market.get("note", ""))
+    # 构建三票维度详情
+    dim_details = ""
+    if market_note:
+        parts = market_note.split("；")
+        dim_items = []
+        for p in parts:
+            if "→" in p:
+                dim_items.append(f'<span class="dim-chip">{p.strip()}</span>')
+        if dim_items:
+            dim_details = "".join(dim_items)
+    # 市场研判 chip
+    if market_regime == "bull":
+        regime_html = '<span class="chip green">🟢 牛市</span>'
+    elif market_regime == "bear":
+        regime_html = '<span class="chip danger">🔴 熊市</span>'
+    elif market_regime == "transition":
+        regime_html = '<span class="chip warn">🟡 震荡</span>'
+    else:
+        regime_html = '<span class="chip muted">? 未知</span>'
+    regime_title = f"投票 {market_bull_votes}/3 → {market_regime}。" + market_note
+    # 市场状态 chip (简化为仓位提示)
+    if market_regime != "bull":
         market_html = '<span class="chip danger">🔻 防御模式</span>'
         market_title = f"仓位上限降至{market.get('position_multiplier', 0.6):.0%}。" + str(market.get("note", ""))
-    elif market_label == "normal":
+    else:
         market_html = '<span class="chip green">✓ 正常模式</span>'
         market_title = str(market.get("note", "多数股票在均线上方且趋势上行"))
-    else:
-        market_html = '<span class="chip muted">? 未知</span>'
-        market_title = ""
     issues = health.get("issues") or []
     issue_text = "；".join(str(issue) for issue in issues[:3]) or "当前未发现关键数据问题"
     return f"""
@@ -190,9 +213,11 @@ def _health_html(summary: dict) -> str:
         <span class="muted">用于判断本次结果能否直接用于研究复核</span>
       </div>
       <div class="health-metrics">
-        <div title="{market_title}"><span>市场状态</span><strong>{market_html}</strong></div>
+        <div title="{escape(regime_title)}"><span>市场研判</span><strong>{regime_html}</strong></div>
+        <div title="{escape(market_title)}"><span>仓位管理</span><strong>{market_html}</strong></div>
         <div><span>最新行情日</span><strong>{escape(str(latest))}</strong></div>
         <div><span>股票池缺指标</span><strong>{escape(str(sector_missing))}/{escape(str(sector_rows))}</strong></div>
+        <div><span>宏观分缺失</span><strong>{escape(str(combo_missing))}/{escape(str(combo_rows))}</strong></div>
         <div><span>操作建议缺日线</span><strong>{escape(str(plan_missing))}/{escape(str(plan_rows))}</strong></div>
         <div><span>操作建议可执行</span><strong>{escape(str(plan_usable))}/{escape(str(plan_rows))}</strong></div>
         <div><span>阶段串行</span><strong>{escape(serial_text)}</strong></div>

@@ -83,6 +83,15 @@ Use this file as the first stop when a new thread needs to continue work.
     underperformance from one or two signal dates is shown as yellow
     `单日观察`.
   - The separate candidate-priority list has been removed from the current UI.
+  - Data updates now default to incremental daily-price sync. `sync --dataset
+    daily_prices` and internal `sync_dataset(..., dataset="daily_prices")` pass
+    `skip_existing=True` unless explicitly overridden, so cached symbols are
+    skipped and partially cached symbols fetch only the missing tail. Use
+    `--no-skip-existing`, `--refresh`, or `--update-policy refresh` only for an
+    intentional full repair/rebuild.
+  - Financial-report `--report-date auto` now prefers the latest complete-looking
+    cached/fetched `stock_yjbb_YYYYMMDD` table and avoids using an obviously
+    incomplete fresh quarter when an older complete report is available.
 
 ## Standard Verification
 
@@ -90,6 +99,7 @@ Run these after code changes:
 
 ```bash
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest discover -s tests
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest tests.test_incremental_sync
 git diff --check
 codegraph sync
 ```

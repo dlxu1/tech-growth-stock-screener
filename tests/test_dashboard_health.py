@@ -27,7 +27,7 @@ class DashboardHealthTest(unittest.TestCase):
                     "key": "combo",
                     "rows": [
                         {"code": "000001", "combo_score": 88},
-                        {"code": "000003", "combo_score": 101},
+                        {"code": "000003", "combo_score": None},
                     ],
                 },
                 {
@@ -58,7 +58,8 @@ class DashboardHealthTest(unittest.TestCase):
         self.assertEqual(audit["freshness"]["lag_days"], 1)
         self.assertIn("000003", audit["serial"]["combo_not_in_sector"])
         self.assertIn("000004", audit["serial"]["plan_not_in_fine"])
-        self.assertIn("combo.combo_score", audit["score_ranges"])
+        self.assertEqual(audit["coverage"]["combo_score_missing"], 1)
+        self.assertIn("宏观粗筛分缺失：1/2", audit["issues"])
         self.assertTrue(audit["issues"])
 
     def test_render_health_markdown_is_readable(self) -> None:

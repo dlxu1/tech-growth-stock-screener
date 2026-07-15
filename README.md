@@ -136,8 +136,10 @@ python3 -m venv .venv
 按指数成分同步日线行情：
 
 ```bash
-/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sync --dataset daily_prices --from-index --index-symbol 000300 --start 2026-01-01 --end 2026-07-10 --adjust qfq --source auto --no-proxy --skip-existing
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py sync --dataset daily_prices --from-index --index-symbol 000300 --start 2026-01-01 --end 2026-07-10 --adjust qfq --source auto --no-proxy
 ```
+
+日线同步默认跳过已覆盖区间；如果缓存已有前半段，只补缺失尾段。只有需要完整重拉指定区间时才加 `--no-skip-existing`。
 
 ### 3. 生成交互式 dashboard
 
@@ -311,6 +313,8 @@ dashboard 支持：
 - `--update-end`：日线预更新结束日期，默认当天。
 - `--update-daily-window-days`：未指定日期时的默认回看天数，默认 180 天。
 - `--update-adjust`：日线复权模式，可选空值、`qfq`、`hfq`。
+
+普通“更新数据”请求应使用默认增量同步。只有需要修复缓存或重建全量数据时，才使用 `--no-skip-existing`、`--refresh` 或 `--update-policy refresh`。
 
 ### 7. 离线运行
 

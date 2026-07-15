@@ -33,6 +33,35 @@ review. The optional signal backtest described below is the only step that may
 read daily quotes after `as_of_date`, and it does so only to calculate fixed
 forward holding returns for the selected signal date.
 
+## Data Update Policy
+
+Data updates should be incremental by default. Do not force full remote refreshes
+unless the user explicitly asks for a rebuild or passes the force-refresh flags.
+
+- `sync --dataset daily_prices` defaults to `--skip-existing`. For each symbol,
+  if `quotes_daily` already covers the requested date range, the symbol is
+  skipped. If the cache covers the beginning of the requested range but is
+  missing the tail, only dates after the cached max `trade_date` are fetched and
+  upserted into `quotes_daily`.
+- Use `--no-skip-existing` only when deliberately re-fetching the full requested
+  daily-price range.
+- `--refresh` and `--update-policy refresh` are force-refresh controls. Ordinary
+  "更新数据" requests should avoid them unless a full rebuild is requested.
+- `sync --dataset financials --report-date auto` should avoid selecting a newly
+  published but obviously incomplete quarter. Auto selection prefers the latest
+  cached/fetched `stock_yjbb_YYYYMMDD` report whose row count is at least
+  `FINANCIAL_AUTO_MIN_ROWS`; if no complete candidate exists, it may fall back
+  to the first available incomplete candidate with visible row counts.
+
+Source table behavior remains table-specific:
+
+- `quotes_daily` and `index_constituents` are normalized upsert tables.
+- Raw daily-price source snapshots are stored as range-specific
+  `daily_prices_<code>_<start>_<end>_<adjust>` tables.
+- Spot quotes, industry boards, industry constituents, and financial-report
+  raw tables are source snapshots and may be replaced when their own sync is
+  explicitly run.
+
 ## Stage Contracts
 
 ### 股票池
@@ -85,23 +114,27 @@ provided, this stage receives only stock-pool rows whose configured
 Main score:
 
 ```text
-宏观粗筛分 =
-  多策略共振分 * 35%
-  + 成长分 * 20%
-  + 质量分 * 18%
-  + 风控分 * 15%
+基础宏观粗筛分 =
+  多策略共振分 * 30%
+  + 成长分 * 22%
+  + 质量分 * 20%
+  + 风控分 * 13%
   + 流动性分 * 7%
-  + 动量分 * 5%
+  + 动量分 * 8%
 ```
 
 Component meanings:
 
 - `overlap_score`: matched strategy weight / total strategy weight * 100.
 - `growth_score`: percentile rank of positive revenue YoY plus positive profit YoY.
-- `quality_score`: ROE rank * 45% + gross margin rank * 30% + PE reasonableness * 25%.
-- `risk_control_score`: low absolute max drawdown rank * 70% + amount rank * 30%.
+- `quality_score`: ROE within-industry rank * 40% + gross margin within-industry rank * 25% + PEG score * 35%.
+- `risk_control_score`: |max_drawdown_252d| within-industry rank * 70% + amount_20d global rank * 30%.
 - `liquidity_score`: 20-day amount percentile rank * 100.
-- `momentum_score`: 60-day return percentile rank * 100.
+- `momentum_score`: return_60d rank * 55% + mean_reversion_score * 45%.
+- The final `combo_score` is recomputed by market regime:
+  - `bull`: overlap 30%, growth 20%, quality 15%, risk 10%, liquidity 5%, momentum 20%; momentum = trend 70% + reversion 30%.
+  - `transition`: overlap 30%, growth 23%, quality 24.8%, risk 14.8%, liquidity 7%, momentum 3.2%; momentum = trend 30% + reversion 70%.
+  - `bear`: overlap 25%, growth 22%, quality 30%, risk 18%, liquidity 5%, momentum 0%; displayed momentum uses reversion only but does not affect total score.
 
 Dashboard presentation:
 
@@ -112,6 +145,15 @@ Dashboard presentation:
 - Scores and numeric values should keep two decimals.
 
 ### 技术分析
+
+技术分 =
+  趋势分 \* 28
+  + 动量分 \* 22
+  + 量能分 \* 22
+  + 突破分 \* 15
+  + 风险分 \* 8
+  + 流动性分 \* 5
+
 
 Purpose: rank the previous macro coarse result with daily-price technical
 signals.
@@ -382,34 +424,44 @@ changes, update this file in the same change and add a short note to
 
 ### 市场状态判定
 
-Dashboard pipeline 在 fine 阶段完成后自动运行 `detect_market_state()`：
+Dashboard pipeline 在 stock-pool 阶段完成后、combo 阶段前运行 `dashboard.market_state.detect()`：
 
-- 输入：fine 候选股的全部 6 位代码 + 可选的 `as_of_date` 截断日期
-- 输出：`MarketState` 数据类，包含 label（normal/defensive）、中位指标、仓位乘数（1.0 或 0.60）、说明文字
+- 输入：股票池候选股的全部 6 位代码 + 可选的 `as_of_date` 截断日期
+- 输出：`MarketState` 数据类，包含 label/regime（`bull`、`transition`、`bear`）、中位指标、市场宽度、投票数、仓位乘数、说明文字
 
-判定逻辑：对每只股票取最近 20 个交易日的 MA20，计算 close/MA20 比率和 MA20 近 6 日斜率。取所有有效股票的中位数。
+判定逻辑：对每只股票取最近 20/30 个交易日均线，计算 close/MA20、close/MA30、MA20 近 6 日斜率，并取有效股票样本的中位数。
 
-- 中位 close/MA20 > 1.0 且中位 MA20 斜率 > 0 → **正常模式**（NORMAL）
-- 任一条件不满足 → **防御模式**（DEFENSIVE）
-- 有效样本不足（< 1 只股票有完整 20 日数据）→ 默认正常模式
+- 样本中位 close/MA30 > 1.0 → 1 张牛市票
+- 样本宽度（close/MA20 > 1 的股票占比）> 60% → 1 张牛市票
+- 样本中位 MA20 斜率 > 0 → 1 张牛市票
+- 3/3 → **牛市**（bull）
+- 1/3 或 2/3 → **震荡市**（transition）
+- 0/3 → **熊市**（bear）
+- 无候选股、缺少日线或有效样本不足时，默认 bull，以避免离线缓存不完整时误触发防御。
 
-### 防御模式下的行为
+### 不同市场状态下的行为
 
-防御模式通过修改 `args.max_position` 生效：
-- 原始 max_position（默认 0.25）× 0.60 = 0.15
-- `_score_position_cap()` 读取的是修改后的值，因此：
-  - 技术分 ≥ 85：仓位上限从 25% 降至 15%
-  - 技术分 ≥ 75：仓位上限从 min(25%, 20%) 降至 min(15%, 20%) = 15%
-  - 技术分 ≥ 60：仓位上限从 min(25%, 12%) 降至 min(15%, 12%) = 12%
+市场状态会传入 combo 阶段重新计算动量和 `combo_score`：
 
-不修改评分公式、不改变候选股排序、不改变操作建议的策略分派逻辑。
+- `bull`：提高趋势动量权重，`momentum_score = trend 70% + reversion 30%`，总分中 momentum 权重 20%。
+- `transition`：降低动量总权重，偏向质量和反转，`momentum_score = trend 30% + reversion 70%`，总分中 momentum 权重 3.2%。
+- `bear`：动量展示为反转分，但总分 momentum 权重为 0；质量和风控权重提高。
+
+非 bull 状态还会修改 `args.max_position`：
+- `transition` 且 2 张牛市票：原始 max_position × 0.85
+- `transition` 且 1 张牛市票：原始 max_position × 0.60
+- `bear`：原始 max_position × 0.60
+
+`_score_position_cap()` 读取的是修改后的仓位上限。操作建议字段本身不新增个人预算/配置类字段。
 
 ### 看板展示
 
 `model["summary"]["market_state"]` 字段包含：
-- `label`：`"normal"` 或 `"defensive"`
+- `label`/`regime`：`"bull"`、`"transition"` 或 `"bear"`
 - `median_close_vs_ma20`：中位比率（可能为 null）
 - `median_ma20_slope`：中位斜率（可能为 null）
+- `breadth_pct`：样本宽度（close/MA20 > 1 的股票占比，可能为 null）
+- `bull_votes`：牛市投票数（0-3）
 - `sample_count`：有效样本数
 - `position_multiplier`：仓位乘数
 - `note`：人类可读的说明
@@ -443,3 +495,59 @@ risk_control_score = (
 - `technical_timing_threshold`：technical_score 的 65 分位（样本 ≥ 15），否则默认 75
 
 阈值通过 `model["summary"]["adaptive_thresholds"]` 暴露。前端、signal_backtest、operation_backtest 均使用动态阈值。未传入时降级到模块级默认常量。
+
+## 2026-07-15: PEG 因子与动量/反转拆分（濮元恺《量化投资技术分析实战》优化）
+
+### quality_score PEG 计算
+
+`revenue_yoy`/`profit_yoy` 在不同源中可能是 `20.0` 这种百分数，也可能是 `0.20` 这种小数比例。PEG 计算先取两者正值均值；若均值 `<= 1.0`，按小数比例乘以 100，否则按百分数原样使用。
+
+PEG = PE / max(growth_pct, 1)。得分映射：
+- PEG < 0.5 → 深度低估 → 1.0
+- PEG 0.5-1.0 → 合理偏低估 → 0.85~1.0
+- PEG 1.0-2.0 → 合理偏贵 → 0.40~0.85
+- PEG > 2.0 或 PE ≤ 0 → 0.0~0.40
+
+### momentum_score 反转信号
+
+mean_reversion_score 仅在 revenue_yoy > 0 且 profit_yoy > 0 时激活，并由年内回撤分乘以 60 日收益因子：
+- |max_drawdown_252d| > 25% → 1.0
+- 15%-25% → 0.5~0.8
+- 10%-15% → 0.2~0.5
+- < 10% → 0.0
+
+60 日收益因子用于避免把已经大幅反弹的股票误当成反转候选：
+- return_60d <= 0：因子 0.6~1.0，跌幅越深越接近 1.0
+- return_60d > 0：因子 0.2~0.5，涨幅越大惩罚越强
+
+### technical_score 技术分调整
+
+技术分 =
+  趋势分 * 28
+  + 动量分 * 22
+  + 量能分 * 22
+  + 突破分 * 15
+  + 风险分 * 8
+  + 流动性分 * 5
+
+量能分细化：
+- 放量阳线（量比≥1.2 且收阳）：35%
+- 显著放量阳线（量比≥1.5 且收阳）：20%
+- 当日上涨：25%
+- 量价配合（量比>1, 涨, 收盘上半区）：10%
+- 流动性达标：10%
+
+MACD 信号细化：
+- MACD 柱正值且在加速扩大：20%
+- MACD 柱正值但在缩小：8%
+- MACD 金叉（柱值从非正转正）：7%
+
+突破分筹码集中度：
+- 近 5 日量 / 近 20 日量 ≥ 35%：1.0
+- 25%-35%：0.5
+- < 25%：0.0
+
+风险分换手率稳定性：
+- turnover_stability = 1 - CV(20日换手率)，CV 越小越稳定
+- ≥ 0.7：稳健机构持仓特征 → 0.30
+- 0.4-0.7：中等 → 0.15
