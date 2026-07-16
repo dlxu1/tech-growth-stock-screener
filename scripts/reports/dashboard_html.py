@@ -755,6 +755,27 @@ def render_dashboard_html(model: dict) -> str:
       box-shadow: 0 10px 24px rgba(24, 33, 47, 0.24);
       z-index: 8;
     }}
+    .matrix-point.repeat-hit {{
+      border-color: #f6d56b;
+      box-shadow: 0 0 0 3px rgba(246, 213, 107, 0.52), 0 10px 28px rgba(36, 124, 109, 0.30);
+    }}
+    .hit-badge {{
+      position: absolute;
+      right: -11px;
+      top: -11px;
+      min-width: 22px;
+      height: 18px;
+      padding: 0 4px;
+      border: 1px solid #f6d56b;
+      border-radius: 999px;
+      background: #fff8dc;
+      color: #8a5a00;
+      font-size: 10px;
+      line-height: 16px;
+      font-weight: 700;
+      pointer-events: none;
+      box-shadow: 0 4px 10px rgba(24, 33, 47, 0.18);
+    }}
     .matrix-point.green {{ background: var(--accent); }}
     .matrix-point.blue {{ background: #315f9f; }}
     .matrix-point.warn {{ background: var(--warn); }}
@@ -826,6 +847,12 @@ def render_dashboard_html(model: dict) -> str:
     .detail-status {{
       margin-bottom: 8px;
       width: fit-content;
+    }}
+    .recent-hit-note {{
+      margin-top: 6px;
+      color: #8a5a00;
+      font-size: 12px;
+      font-weight: 600;
     }}
     .kpis {{
       display: grid;
@@ -1728,6 +1755,39 @@ def render_dashboard_html(model: dict) -> str:
       return (macro ?? 0) * 0.65 + (technical ?? 0) * 0.35;
     }}
 
+    function recentHighGoodHits(plan, fine) {{
+      return plan?.recent_high_good_hits || fine?.recent_high_good_hits || null;
+    }}
+
+    function recentHitCount(item) {{
+      const count = Number(item?.recentHighGoodHits?.count || 0);
+      return Number.isFinite(count) ? count : 0;
+    }}
+
+    function recentHitDates(item) {{
+      const dates = item?.recentHighGoodHits?.dates;
+      return Array.isArray(dates) ? dates.map(text).filter((value) => value !== "N/A") : [];
+    }}
+
+    function isRepeatHighGoodHit(item) {{
+      return item?.priority?.label === "高潜力 + 好时机" && item?.recentHighGoodHits?.highlight === true && recentHitCount(item) > 3;
+    }}
+
+    function recentHitTitle(item) {{
+      const count = recentHitCount(item);
+      if (!count) return "";
+      const dates = recentHitDates(item);
+      const dateText = dates.length ? `：${{dates.join("、")}}` : "";
+      return `近1月命中 ${{count}} 次${{dateText}}`;
+    }}
+
+    function renderRecentHitNote(item) {{
+      const title = recentHitTitle(item);
+      if (!title) return "";
+      const tone = isRepeatHighGoodHit(item) ? "，属于重复强信号" : "";
+      return `<div class="recent-hit-note">${{escapeHtml(title + tone)}}</div>`;
+    }}
+
     function pointSize(attention_score) {{
       const score = numberValue(attention_score);
       if (score === null) return 28;
@@ -1818,6 +1878,7 @@ def render_dashboard_html(model: dict) -> str:
           attention_score,
           priority,
           action: plan.action || "观察",
+          recentHighGoodHits: recentHighGoodHits(plan, fine),
           plan,
           combo,
           fine,
@@ -1933,8 +1994,14 @@ def render_dashboard_html(model: dict) -> str:
       const points = positioned.map((item) => {{
         const initial = text(item.name).slice(0, 1);
         const selected = item.code === selectedCandidateCode ? " selected" : "";
+        const repeat = isRepeatHighGoodHit(item);
+        const repeatClass = repeat ? " repeat-hit" : "";
+        const repeatTitle = recentHitTitle(item);
+        const title = `${{item.name}}｜${{classificationReason(item)}}｜综合关注分 ${{scoreText(item.attention_score)}}${{repeatTitle ? "｜" + repeatTitle : ""}}`;
+        const count = recentHitCount(item);
+        const badge = repeat ? `<span class="hit-badge">${{count}}x</span>` : "";
         return `
-          <button type="button" class="matrix-point ${{item.priority.tone}}${{selected}}" data-code="${{escapeHtml(item.code)}}" title="${{escapeHtml(item.name)}}｜${{escapeHtml(classificationReason(item))}}｜综合关注分 ${{scoreText(item.attention_score)}}" style="left:${{item.matrixX.toFixed(1)}}%;top:${{item.matrixY.toFixed(1)}}%;--point-size:${{item.pointSize.toFixed(0)}}px;z-index:${{item.zIndex}}">${{escapeHtml(initial)}}</button>
+          <button type="button" class="matrix-point ${{item.priority.tone}}${{repeatClass}}${{selected}}" data-code="${{escapeHtml(item.code)}}" title="${{escapeHtml(title)}}" style="left:${{item.matrixX.toFixed(1)}}%;top:${{item.matrixY.toFixed(1)}}%;--point-size:${{item.pointSize.toFixed(0)}}px;z-index:${{item.zIndex}}">${{escapeHtml(initial)}}${{badge}}</button>
         `;
       }}).join("");
       potentialMatrix.innerHTML = `
@@ -2028,6 +2095,7 @@ def render_dashboard_html(model: dict) -> str:
                 <span class="detail-status chip ${{item.priority.tone}}">${{escapeHtml(item.action)}}</span>
                 <h2>${{escapeHtml(item.name)}} <span class="code">${{escapeHtml(item.code)}}</span></h2>
                 <div class="muted">${{escapeHtml(item.board || "细筛结果股票")}} · ${{escapeHtml(item.stockType || "未分类")}}</div>
+                ${{renderRecentHitNote(item)}}
               </div>
               <div class="kpis">
                 <div class="kpi" data-score-help="${{escapeHtml(metricHelp("macroScore"))}}"><strong>${{scoreText(item.macroScore)}}</strong><span>${{helpLabel("宏观潜力", "macroScore")}}</span></div>

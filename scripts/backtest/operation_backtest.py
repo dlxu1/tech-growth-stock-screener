@@ -243,7 +243,12 @@ def build_operation_backtest_model(
     frame = plans.copy()
     if "code" in frame.columns:
         frame["code"] = frame["code"].astype(str).str.zfill(6)
-    candidates = frame[frame.apply(_is_candidate, axis=1)].copy()
+    candidates = frame[
+        frame.apply(
+            lambda row: _is_candidate(row, macro_threshold=macro_threshold, tech_threshold=tech_threshold),
+            axis=1,
+        )
+    ].copy()
     prices = _clean_quotes(quotes)
     rows = [_simulate_one(row, prices, signal_date, profit_target_pct) for _, row in candidates.iterrows()]
     return {

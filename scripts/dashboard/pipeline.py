@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pandas as pd
 
+from common import cache_dir, db_path
 from dashboard.health import audit_dashboard_model
 from dashboard.stock_types import annotate_stock_types, filter_by_stock_types, load_stock_type_rules, parse_stock_types
 from dashboard.market_state import compute_dynamic_thresholds, detect
@@ -14,6 +19,144 @@ from plan.trade_plan import run_trade_plan
 from strategies import sector_screen
 from strategies.coarse.registry import run_combo
 from strategies.fine.technical import run as run_fine
+
+
+RECENT_HIGH_GOOD_WINDOW_DAYS = 30
+RECENT_HIGH_GOOD_HIGHLIGHT_MIN_COUNT = 4
+RECENT_HIGH_GOOD_CACHE_VERSION = 1
+
+
+def _recent_hits_cache_path():
+    return cache_dir() / "recent_high_good_hits.json"
+
+
+def _dashboard_data_fingerprint() -> dict:
+    path = db_path()
+    if not path.exists():
+        return {"db_path": str(path), "missing": True}
+    tables = {
+        "quotes_daily": ["trade_date", "updated_at"],
+        "financial_reports": ["report_date", "updated_at"],
+        "market_cap_snapshot": ["as_of_date", "updated_at"],
+        "index_constituents": ["constituent_date", "weight_date", "updated_at"],
+        "industry_members": ["updated_at"],
+        "stocks": ["updated_at"],
+    }
+    conn = sqlite3.connect(path)
+    try:
+        fingerprint = {"db_path": str(path), "tables": {}}
+        existing_tables = {
+            str(row[0])
+            for row in conn.execute("select name from sqlite_master where type='table'").fetchall()
+        }
+        for table, date_columns in tables.items():
+            if table not in existing_tables:
+                fingerprint["tables"][table] = {"missing": True}
+                continue
+            columns = {str(row[1]) for row in conn.execute(f"pragma table_info({table})").fetchall()}
+            selected_columns = [column for column in date_columns if column in columns]
+            expressions = ["count(*)", *[f"max({column})" for column in selected_columns]]
+            row = conn.execute(f"select {', '.join(expressions)} from {table}").fetchone()
+            table_fingerprint = {"count": int(row[0] or 0)}
+            for index, column in enumerate(selected_columns, start=1):
+                table_fingerprint[f"max_{column}"] = row[index]
+            fingerprint["tables"][table] = table_fingerprint
+        return fingerprint
+    except Exception:
+        return {"db_path": str(path), "unavailable": True}
+    finally:
+        conn.close()
+
+
+def _cache_arg_value(args, key: str):
+    value = getattr(args, key, "")
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return str(value)
+
+
+def _recent_hits_cache_key(model: dict, args, as_of_date: str, signal_dates: list[str], current_codes: set[str]) -> str:
+    summary = model.get("summary") or {}
+    identity = {
+        "version": RECENT_HIGH_GOOD_CACHE_VERSION,
+        "window_days": RECENT_HIGH_GOOD_WINDOW_DAYS,
+        "highlight_min_count": RECENT_HIGH_GOOD_HIGHLIGHT_MIN_COUNT,
+        "as_of_date": as_of_date,
+        "signal_dates": signal_dates,
+        "current_codes": sorted(current_codes),
+        "adaptive_thresholds": summary.get("adaptive_thresholds") or {},
+        "data": _dashboard_data_fingerprint(),
+        "args": {
+            key: _cache_arg_value(args, key)
+            for key in [
+                "source",
+                "strategy",
+                "coarse_strategy",
+                "universe",
+                "universe_index_symbol",
+                "sector",
+                "stock_types",
+                "stock_type_config",
+                "report_date",
+                "top",
+                "sector_top",
+                "combo_top",
+            ]
+        },
+    }
+    raw = json.dumps(identity, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _load_recent_hits_cache(key: str, current_codes: set[str]) -> tuple[bool, dict[str, dict]]:
+    path = _recent_hits_cache_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, {}
+    entry = payload.get(key) if isinstance(payload, dict) else None
+    if not isinstance(entry, dict):
+        return False, {}
+    hits = entry.get("hits")
+    if not isinstance(hits, dict):
+        return True, {}
+    filtered: dict[str, dict] = {}
+    for raw_code, raw_info in hits.items():
+        code = str(raw_code).zfill(6)
+        if code not in current_codes or not isinstance(raw_info, dict):
+            continue
+        dates = [str(item) for item in raw_info.get("dates", []) if item]
+        count = int(raw_info.get("count", len(dates)) or 0)
+        filtered[code] = {
+            "count": count,
+            "dates": dates,
+            "window_start": str(raw_info.get("window_start") or ""),
+            "window_end": str(raw_info.get("window_end") or ""),
+            "highlight": bool(raw_info.get("highlight", count >= RECENT_HIGH_GOOD_HIGHLIGHT_MIN_COUNT)),
+        }
+    return True, filtered
+
+
+def _save_recent_hits_cache(key: str, hits: dict[str, dict]) -> None:
+    path = _recent_hits_cache_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload[key] = {
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "hits": hits,
+    }
+    if len(payload) > 100:
+        ordered = sorted(payload.items(), key=lambda item: str((item[1] or {}).get("created_at") or ""))
+        payload = dict(ordered[-100:])
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _attention_ranked_candidates(fine: pd.DataFrame) -> pd.DataFrame:
@@ -117,6 +260,9 @@ def _build_signal_inputs(model: dict, args) -> tuple[str, pd.DataFrame, pd.DataF
         signal_args.backtest_date = ""
         signal_args._skip_backtest = True
         signal_args._skip_signal_validation = True
+        signal_args._skip_operation_backtest = True
+        signal_args._skip_recent_high_good_hits = True
+        signal_args._signal_inputs = None
         signal_model = run_dashboard(signal_args)
 
     candidates = candidates_from_dashboard_model(signal_model)
@@ -125,6 +271,167 @@ def _build_signal_inputs(model: dict, args) -> tuple[str, pd.DataFrame, pd.DataF
     result = (signal_date, candidates, quotes, signal_model)
     setattr(args, "_signal_inputs", result)
     return result
+
+
+def _recent_hit_bounds(as_of_date: str) -> tuple[str, str]:
+    end = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+    start = end - timedelta(days=RECENT_HIGH_GOOD_WINDOW_DAYS)
+    return start.isoformat(), end.isoformat()
+
+
+def _latest_trade_date_from_model(model: dict) -> str:
+    dates = []
+    for stage in model.get("stages", []):
+        for row in stage.get("rows", []):
+            value = row.get("latest_trade_date")
+            if value:
+                dates.append(str(value))
+    return max(dates) if dates else ""
+
+
+def _recent_hit_end_date(model: dict, args) -> str:
+    explicit = str(getattr(args, "as_of_date", "") or "").strip()
+    if explicit:
+        return explicit
+    summary_date = str((model.get("summary") or {}).get("as_of_date") or "").strip()
+    if summary_date:
+        return summary_date
+    return _latest_trade_date_from_model(model)
+
+
+def _recent_signal_dates(as_of_date: str, window_days: int = RECENT_HIGH_GOOD_WINDOW_DAYS) -> list[str]:
+    try:
+        end = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return []
+    start = end - timedelta(days=window_days)
+    conn = sqlite3.connect(db_path())
+    try:
+        rows = conn.execute(
+            """
+            select distinct trade_date
+            from quotes_daily
+            where trade_date>=? and trade_date<=?
+            order by trade_date
+            """,
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
+    return [str(row[0]) for row in rows if row and row[0]]
+
+
+def _score_column(df: pd.DataFrame, column: str) -> pd.Series:
+    if column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce")
+    return pd.Series(float("nan"), index=df.index)
+
+
+def _high_good_codes_from_model(model: dict) -> set[str]:
+    from backtest.signal_backtest import candidates_from_dashboard_model
+
+    candidates = candidates_from_dashboard_model(model)
+    if candidates.empty or "code" not in candidates.columns:
+        return set()
+    thresholds = (model.get("summary") or {}).get("adaptive_thresholds") or {}
+    macro_threshold = float(thresholds.get("macro_potential_threshold") or 80)
+    tech_threshold = float(thresholds.get("technical_timing_threshold") or 75)
+    macro = _score_column(candidates, "combo_score").fillna(_score_column(candidates, "coarse_score")).fillna(0)
+    macro = macro.where(macro > 1, macro * 100)
+    technical = _score_column(candidates, "technical_score").fillna(0)
+    codes = candidates["code"].astype(str).str.zfill(6)
+    matched = candidates[(macro >= macro_threshold) & (technical >= tech_threshold)].copy()
+    if matched.empty:
+        return set()
+    return set(codes.loc[matched.index].tolist())
+
+
+def _collect_recent_high_good_hits(model: dict, args) -> dict[str, dict]:
+    if getattr(args, "_skip_recent_high_good_hits", False):
+        return {}
+    as_of_date = _recent_hit_end_date(model, args)
+    if not as_of_date:
+        return {}
+    current_codes = _high_good_codes_from_model(model)
+    if not current_codes:
+        return {}
+    signal_dates = _recent_signal_dates(as_of_date)
+    if not signal_dates:
+        return {}
+    cache_key = _recent_hits_cache_key(model, args, as_of_date, signal_dates, current_codes)
+    cache_hit, cached_hits = _load_recent_hits_cache(cache_key, current_codes)
+    if cache_hit:
+        return cached_hits
+
+    hit_dates_by_code = {code: [] for code in current_codes}
+    for signal_date in signal_dates:
+        if signal_date == as_of_date:
+            signal_model = model
+        else:
+            signal_args = SimpleNamespace(**vars(args))
+            signal_args.as_of_date = signal_date
+            signal_args.backtest_date = ""
+            signal_args._skip_backtest = True
+            signal_args._skip_signal_validation = True
+            signal_args._skip_operation_backtest = True
+            signal_args._skip_recent_high_good_hits = True
+            signal_args._signal_inputs = None
+            signal_model = run_dashboard(signal_args)
+        for code in _high_good_codes_from_model(signal_model) & current_codes:
+            hit_dates_by_code.setdefault(code, []).append(signal_date)
+
+    window_start, window_end = _recent_hit_bounds(as_of_date)
+    hits = {
+        code: {
+            "count": len(dates),
+            "dates": dates,
+            "window_start": window_start,
+            "window_end": window_end,
+            "highlight": len(dates) >= RECENT_HIGH_GOOD_HIGHLIGHT_MIN_COUNT,
+        }
+        for code, dates in hit_dates_by_code.items()
+        if dates
+    }
+    _save_recent_hits_cache(cache_key, hits)
+    return hits
+
+
+def _empty_recent_hit_info(window_start: str, window_end: str) -> dict:
+    return {
+        "count": 0,
+        "dates": [],
+        "window_start": window_start,
+        "window_end": window_end,
+        "highlight": False,
+    }
+
+
+def _annotate_recent_high_good_hits(model: dict, hits_by_code: dict[str, dict], args) -> None:
+    as_of_date = _recent_hit_end_date(model, args)
+    if as_of_date:
+        try:
+            window_start, window_end = _recent_hit_bounds(as_of_date)
+        except (TypeError, ValueError):
+            window_start, window_end = "", as_of_date
+    else:
+        window_start, window_end = "", ""
+    model.setdefault("summary", {})["recent_high_good_hits"] = {
+        "window_start": window_start,
+        "window_end": window_end,
+        "window_days": RECENT_HIGH_GOOD_WINDOW_DAYS,
+        "highlight_min_count": RECENT_HIGH_GOOD_HIGHLIGHT_MIN_COUNT,
+    }
+    for stage in model.get("stages", []):
+        if stage.get("key") not in {"fine", "plan"}:
+            continue
+        columns = stage.setdefault("columns", [])
+        if "recent_high_good_hits" not in columns:
+            columns.append("recent_high_good_hits")
+        for row in stage.get("rows", []):
+            code = str(row.get("code") or "").zfill(6)
+            row["recent_high_good_hits"] = hits_by_code.get(code) or _empty_recent_hit_info(window_start, window_end)
 
 
 def run_dashboard(args) -> dict:
@@ -210,6 +517,8 @@ def run_dashboard(args) -> dict:
     model["summary"]["adaptive_thresholds"] = adaptive_thresholds
     setattr(args, "macro_potential_threshold", adaptive_thresholds.get("macro_potential_threshold"))
     setattr(args, "technical_timing_threshold", adaptive_thresholds.get("technical_timing_threshold"))
+    recent_hits = _collect_recent_high_good_hits(model, args)
+    _annotate_recent_high_good_hits(model, recent_hits, args)
     model["summary"]["health"] = audit_dashboard_model(model)
     backtest = _build_backtest_model(model, args)
     if backtest is not None:

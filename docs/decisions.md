@@ -219,6 +219,24 @@ to the latest cached `stock_yjbb_YYYYMMDD` source table.
 Reason: the local dashboard should render and expose data-health degradation
 instead of returning HTTP 500 when older report periods were never cached.
 
+## 2026-07-17: Repeated Strong-Signal Stats Are Cached
+
+Decision: the `近 1 月重复强信号` calculation keeps its existing semantics but is
+cached. The persistent cache stores computed `recent_high_good_hits` by
+dashboard date, signal-date list, current high-potential+good-timing codes,
+relevant dashboard parameters, cache version, and SQLite data-file fingerprint.
+The live dashboard server also caches rendered responses in memory for identical
+URLs while the key SQLite table freshness/count fingerprint is unchanged.
+
+Reason: computing repeated strong signals by rerunning roughly one month of
+historical dashboard snapshots added about 70 seconds to each page load. Cache
+reuse keeps the first uncached calculation correct and makes refreshes or
+service restarts reuse the same result when the source data has not changed.
+
+Implication: do not change repeated-hit formulas, adaptive-threshold behavior,
+or key parameters without bumping the cache version in
+`scripts/dashboard/pipeline.py`.
+
 Implication: the fallback report date must be visible in stage metadata. Missing
 daily quotes before the cached quote range should remain a health warning rather
 than being hidden or forward-filled.
@@ -444,3 +462,11 @@ Implication:
 - 4.6 换手率和资金流模型（主力和筹码盘根错节）
 - 4.8 聪明钱因子模型（低 CV 换手率近似机构行为）
 - 4.4 技术指标测试平台（多指标验证、MACD 发散检测）
+
+## 2026-07-16: 矩阵标记近 1 月重复强信号
+
+Decision: 对当前矩阵中属于 `好时机+高潜力` 的股票，统计过去 30 个自然日内它们在可用交易日上再次落入 `好时机+高潜力` 的次数。每个历史信号日使用该日期重算后的动态阈值，不套用当前日期阈值。命中次数从 4 次起在矩阵点上显示外圈和次数 badge，hover 展示具体命中日期，右侧详情显示近 1 月命中说明。
+
+Reason: 单日落入高潜力+好时机可能是偶然分布位置；连续多次落入同一象限说明这只股票在近期多次同时满足宏观潜力和技术时机，有必要在矩阵上显式提醒，但不能因此直接改变评分公式或操作建议。
+
+Implication: `recent_high_good_hits` 是展示和诊断字段，出现在技术分析/操作建议行中。它不得改变 `combo_score`、`technical_score`、动态阈值、阶段样本、回测样本或操作计划。历史统计递归重跑 dashboard 时必须跳过回测和重复统计，避免递归放大耗时。

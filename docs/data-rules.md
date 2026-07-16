@@ -230,6 +230,20 @@ The matrix can be recalculated for a historical date through the local
 dashboard server or a static dashboard generated with `--as-of-date`. Changing
 the date must rerun the serial dashboard flow and rebuild all matrix scores from
 the selected date's available cached data.
+For stocks that are currently classified as `好时机+高潜力`, the dashboard also
+tracks how often they appeared in the same quadrant during the previous 30
+calendar days. Each historical signal date uses that date's own adaptive matrix
+thresholds, not today's thresholds. The count is exposed on fine/plan rows as
+`recent_high_good_hits` with `count`, `dates`, `window_start`, `window_end`, and
+`highlight`. `highlight=true` starts at 4 hits, and the HTML matrix renders a
+special ring/badge plus hover dates for those repeated strong signals. This is
+display-only diagnostic context and must not change scores, thresholds, stage
+membership, or operation advice. The computed repeated-signal result is cached
+under `.cache/recent_high_good_hits.json` by dashboard date, signal-date window,
+current high-potential+good-timing codes, relevant dashboard parameters, cache
+version, and key SQLite table freshness/count fingerprints. Cache reuse must preserve each
+historical date's own adaptive thresholds; bump the cache version if the
+calculation semantics change.
 When the CSI 300 constituent cache has no snapshot at or before the selected
 date, historical replay falls back to the latest cached constituent snapshot and
 still applies the selected date cutoff to quotes and financial-report dates.

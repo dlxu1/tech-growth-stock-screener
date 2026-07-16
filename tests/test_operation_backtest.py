@@ -14,6 +14,40 @@ from backtest.operation_backtest import build_operation_backtest_model
 
 
 class OperationBacktestTest(unittest.TestCase):
+    def test_uses_passed_dynamic_thresholds_when_selecting_candidates(self) -> None:
+        plans = pd.DataFrame(
+            [
+                {
+                    "code": "000004",
+                    "name": "四号",
+                    "action": "等待放量确认",
+                    "primary_strategy": "volume_confirm_buy",
+                    "coarse_score": 76.0,
+                    "technical_score": 60.0,
+                    "planned_entry": 10.0,
+                    "initial_stop": 9.5,
+                    "volume_confirm_amount": 1000.0,
+                    "usable_for_plan": True,
+                }
+            ]
+        )
+        quotes = pd.DataFrame(
+            [
+                {"code": "000004", "trade_date": "2026-07-02", "open": 9.8, "high": 10.1, "low": 9.7, "close": 10.0, "amount": 2000},
+            ]
+        )
+
+        model = build_operation_backtest_model(
+            plans,
+            quotes,
+            signal_date="2026-07-01",
+            macro_threshold=75.0,
+            tech_threshold=52.0,
+        )
+
+        self.assertEqual(model["summary"]["candidate_count"], 1)
+        self.assertEqual(model["summary"]["row_count"], 1)
+
     def test_buys_executable_high_potential_good_timing_plan_and_sells_at_five_percent_profit(self) -> None:
         plans = pd.DataFrame(
             [

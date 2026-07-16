@@ -49,6 +49,17 @@ Use this file as the first stop when a new thread needs to continue work.
     useful through `dashboard-server`; choosing a date reloads
     `/dashboard?as_of_date=YYYY-MM-DD` and reruns the full serial flow using
     cached daily quotes up to that date.
+  - Current `好时机+高潜力` matrix stocks now carry `recent_high_good_hits`,
+    counting how many available signal dates in the previous 30 calendar days
+    also landed in `好时机+高潜力`. Each historical date uses its own adaptive
+    thresholds. Counts of 4 or more show a special matrix ring/badge and hover
+    dates, plus a note in the right-side stock detail panel. The expensive
+    repeated-hit result is cached in `.cache/recent_high_good_hits.json`, keyed
+    by dashboard date, signal-date window, current high-good codes, relevant
+    dashboard parameters, cache version, and key SQLite table freshness/count
+    fingerprints. The dashboard server also keeps identical URL responses in
+    memory while that database fingerprint is unchanged, so refreshing the same
+    date should avoid the 20+ historical reruns.
   - If the requested historical date is earlier than every cached CSI 300
     constituent snapshot, replay falls back to the latest cached constituent
     snapshot while still cutting off quotes/report dates by `as_of_date`.

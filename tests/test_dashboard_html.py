@@ -156,6 +156,13 @@ class DashboardHtmlTest(unittest.TestCase):
                             "ma20": 4.333,
                             "max_drawdown_20d": -0.0456,
                             "technical_reasons": "趋势强",
+                            "recent_high_good_hits": {
+                                "count": 4,
+                                "dates": ["2026-06-26", "2026-07-02", "2026-07-10", "2026-07-16"],
+                                "window_start": "2026-06-16",
+                                "window_end": "2026-07-16",
+                                "highlight": True,
+                            },
                         }
                     ],
                 },
@@ -416,6 +423,12 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("宏观潜力分", html)
         self.assertIn("技术时机分", html)
         self.assertIn("classificationReason", html)
+        self.assertIn("recentHighGoodHits", html)
+        self.assertIn("repeat-hit", html)
+        self.assertIn("hit-badge", html)
+        self.assertIn("近1月命中", html)
+        self.assertIn("recent-hit-note", html)
+        self.assertIn("${count}x", html)
         self.assertIn('class="legend" hidden', html)
         self.assertIn("candidateMetricHelp", html)
         self.assertIn("helpLabel", html)
