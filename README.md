@@ -119,6 +119,19 @@ python3 -m venv .venv
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python
 ```
 
+### Docker/NAS 部署
+
+项目已提供 `Dockerfile` 和 `docker-compose.yml`。在 NAS 上部署后，可通过
+`http://NAS_IP:5001/dashboard` 使用 dashboard：
+
+```bash
+docker compose build
+docker compose up -d dashboard
+```
+
+缓存数据会持久化到 `nas-cache/`。详细步骤见
+[NAS Docker 部署说明](docs/nas-docker-deploy.md)。
+
 ### 2. 同步基础数据
 
 ```bash

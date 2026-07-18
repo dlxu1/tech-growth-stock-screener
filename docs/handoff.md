@@ -119,6 +119,11 @@ Use this file as the first stop when a new thread needs to continue work.
     2026-07-09 case dropped from about 113 seconds on first repeated-hit
     calculation to about 13 seconds when forcing the current date rebuild, and
     about 1 second when the full dashboard snapshot is reused.
+  - NAS 部署文件已加入仓库：`Dockerfile`、`docker-compose.yml`、
+    `.dockerignore`、`requirements.txt` 和 `docs/nas-docker-deploy.md`。
+    推荐常驻运行 `dashboard-server --source cache --host 0.0.0.0 --port 5001`，
+    通过 `nas-cache:/app/.cache` 持久化 SQLite 缓存、dashboard 快照和报表。
+    NAS 浏览器入口为 `http://NAS_IP:5001/dashboard`。
 
 ## Standard Verification
 

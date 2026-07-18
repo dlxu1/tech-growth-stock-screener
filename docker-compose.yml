@@ -1,0 +1,27 @@
+services:
+  dashboard:
+    build: .
+    image: tech-growth-stock-screener:latest
+    container_name: tech-growth-dashboard
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./nas-cache:/app/.cache
+    environment:
+      TZ: Asia/Shanghai
+      TECH_GROWTH_SCREENER_CACHE: /app/.cache
+      TECH_GROWTH_DB: /app/.cache/stock_data.sqlite
+
+  update:
+    build: .
+    image: tech-growth-stock-screener:latest
+    profiles:
+      - manual
+    volumes:
+      - ./nas-cache:/app/.cache
+    environment:
+      TZ: Asia/Shanghai
+      TECH_GROWTH_SCREENER_CACHE: /app/.cache
+      TECH_GROWTH_DB: /app/.cache/stock_data.sqlite
+    command: ["python", "scripts/docker_update.py"]

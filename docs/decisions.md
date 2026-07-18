@@ -219,6 +219,10 @@ to the latest cached `stock_yjbb_YYYYMMDD` source table.
 Reason: the local dashboard should render and expose data-health degradation
 instead of returning HTTP 500 when older report periods were never cached.
 
+Implication: the fallback report date must be visible in stage metadata. Missing
+daily quotes before the cached quote range should remain a health warning rather
+than being hidden or forward-filled.
+
 ## 2026-07-18: Dashboard Model Has A Snapshot Node
 
 Decision: after the dashboard pipeline completes `操作建议`, it builds the full
@@ -258,9 +262,22 @@ Implication: do not change repeated-hit formulas, adaptive-threshold behavior,
 or key parameters without bumping the cache version in
 `scripts/dashboard/pipeline.py`.
 
-Implication: the fallback report date must be visible in stage metadata. Missing
-daily quotes before the cached quote range should remain a health warning rather
-than being hidden or forward-filled.
+## 2026-07-18: NAS Deployment Uses Dashboard Server Container
+
+Decision: NAS/Docker deployment runs the live `dashboard-server` instead of
+serving only the static `dashboard_latest.html`. The container listens on
+`0.0.0.0:5001`, maps the NAS port to `5001`, and persists `/app/.cache` through
+the host `nas-cache` directory.
+
+Reason: the current dashboard depends on server-side recalculation for
+historical dates, `/api/dashboard`, dashboard snapshots, and matrix-signal
+cache reuse. A static HTML-only deployment would lose those interactive
+research workflows.
+
+Implication: keep Docker entrypoints aligned with
+`scripts/run.py dashboard-server --source cache --host 0.0.0.0 --port 5001`.
+Do not bake `.cache` into the image; copy or mount `stock_data.sqlite` through
+the persistent `nas-cache` volume.
 
 ## 2026-07-12: Signal Warnings Require Multi-Date Confirmation
 

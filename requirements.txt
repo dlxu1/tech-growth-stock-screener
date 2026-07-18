@@ -1,0 +1,12 @@
+pandas
+requests
+akshare
+efinance
+baostock
+rich
+openpyxl
+lxml
+html5lib
+beautifulsoup4
+tabulate
+numpy
