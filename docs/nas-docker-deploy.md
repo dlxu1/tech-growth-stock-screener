@@ -46,6 +46,15 @@ docker compose up -d dashboard
 http://NAS_IP:5001/dashboard
 ```
 
+NAS 默认启动参数会关闭 `近 30 天好时机+高潜力重复命中` 的现场补算：
+
+```text
+--no-recent-high-good-hits
+```
+
+这个功能在首次缓存未预热时会补算多个历史日期，容易造成 NAS CPU 波动。
+后续可以通过离线预热或性能优化后再打开。
+
 如果你已经在本机生成过缓存，推荐先复制本机数据库到 NAS：
 
 ```bash

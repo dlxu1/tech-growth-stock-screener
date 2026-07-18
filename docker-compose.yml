@@ -8,6 +8,7 @@ services:
     image: tech-growth-stock-screener:latest
     container_name: tech-growth-dashboard
     restart: unless-stopped
+    command: ["python", "scripts/run.py", "dashboard-server", "--source", "cache", "--host", "0.0.0.0", "--port", "5001", "--no-recent-high-good-hits"]
     ports:
       - "5001:5001"
     volumes:
