@@ -37,6 +37,9 @@ docker compose build
 docker compose up -d dashboard
 ```
 
+`Dockerfile` 和 `docker-compose.yml` 默认给构建过程配置了阿里云 Debian
+和 PyPI 镜像源，用于减少 NAS 从官方源拉包过慢的问题。
+
 然后打开：
 
 ```text

@@ -1,6 +1,10 @@
 services:
   dashboard:
-    build: .
+    build:
+      context: .
+      args:
+        APT_MIRROR: https://mirrors.aliyun.com/debian
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple
     image: tech-growth-stock-screener:latest
     container_name: tech-growth-dashboard
     restart: unless-stopped
@@ -14,7 +18,11 @@ services:
       TECH_GROWTH_DB: /app/.cache/stock_data.sqlite
 
   update:
-    build: .
+    build:
+      context: .
+      args:
+        APT_MIRROR: https://mirrors.aliyun.com/debian
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple
     image: tech-growth-stock-screener:latest
     profiles:
       - manual

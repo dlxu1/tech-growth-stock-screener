@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
-ARG APT_MIRROR=
-ARG PIP_INDEX_URL=
+ARG APT_MIRROR=https://mirrors.aliyun.com/debian
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
