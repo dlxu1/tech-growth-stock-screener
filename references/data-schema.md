@@ -59,6 +59,8 @@ For CSI 300 workflows, `combo`, `fine`, and `plan` can preflight `quotes_daily` 
 - `quotes_daily`: daily OHLCV bars for fine screening, trade plans, and price-derived metrics.
 - `layer_runs`: one row per persisted screen, coarse, combo, fine, or plan execution, including command parameters and layer metadata as JSON.
 - `layer_results`: one row per persisted layer output row. The complete row is stored in `row_json`; common lookup fields such as `code`, `name`, `rank`, `score`, `action`, `strategy`, and `trade_date` are also stored as columns.
+- `dashboard_snapshots`: one row per reusable dashboard model snapshot, keyed by dashboard parameters plus source-data fingerprints. The complete dashboard data model is stored in `model_json`.
+- `dashboard_matrix_signals`: one lightweight row per dashboard matrix candidate per signal date, keyed by dashboard matrix scope, source-data fingerprint, date, and code. It stores macro score, technical score, that date's adaptive thresholds, and whether the stock belongs to `好时机+高潜力`.
 
 ## Layer Result Persistence
 
@@ -73,6 +75,56 @@ Strategy-layer outputs are persisted by default:
 When `plan` runs, the internal coarse and fine outputs are also persisted because each layer owns its own persistence. Use `--no-persist-results` on a command to skip persistence for that command and its internal layer calls.
 
 `layer_results.row_json` is the durable complete payload for future analysis. The extracted columns are intentionally small and query-oriented, so adding new output fields does not require schema migration.
+
+## Dashboard Snapshot Persistence
+
+After the dashboard pipeline completes the plan stage and builds the final
+dashboard data model, it stores a reusable snapshot in `dashboard_snapshots`.
+The table stores:
+
+- `snapshot_key`: SHA-256 key derived from snapshot version, dashboard command
+  parameters, and source-data fingerprint.
+- `as_of_date`, `backtest_date`, `universe`, `universe_index_symbol`, `sector`,
+  `stock_types`, `report_date`, and `source`: query-oriented snapshot
+  dimensions.
+- `data_fingerprint_json`: counts and latest update/date markers for source
+  tables such as `cache_meta`, `quotes_daily`, `index_constituents`, and
+  normalized source tables.
+- `params_json`: normalized dashboard parameters used in the key.
+- `model_json`: the complete JSON-serializable dashboard model consumed by HTML
+  rendering, API responses, and validation.
+- `html_path`: optional static HTML path when a caller records one.
+
+`dashboard_snapshots` is separate from `layer_results`. Stage outputs still
+persist individually for audit and row-level analysis, while the snapshot table
+answers "have we already built this full dashboard model?".
+
+Snapshot reuse is enabled by default for `dashboard`, `dashboard-server`, and
+`validate-dashboard`, and can be disabled with `--no-dashboard-cache`. Passing
+`--rebuild-dashboard-cache`, `--refresh`, or `--update-policy refresh` forces a
+recalculation rather than reusing an old snapshot.
+
+## Dashboard Matrix Signal Persistence
+
+Every cache-enabled dashboard model materializes its matrix membership into
+`dashboard_matrix_signals`. The table stores:
+
+- `scope_key`: SHA-256 key derived from matrix-affecting dashboard parameters
+  such as source, strategy, universe, sector, stock-type filter, report date,
+  and top-count settings.
+- `data_fingerprint_key`: SHA-256 key derived from the same source-data
+  fingerprint used by dashboard snapshots.
+- `as_of_date`, `code`, `name`: signal date and stock identity.
+- `macro_score`, `technical_score`: the values used on the dashboard matrix.
+- `macro_threshold`, `technical_threshold`: that signal date's adaptive
+  thresholds.
+- `is_high_good`: 1 when the row is classified as `好时机+高潜力`.
+- `params_json` and `data_fingerprint_json`: full identity payloads for audit.
+
+The repeated `好时机+高潜力` hit-count annotation should aggregate
+`dashboard_matrix_signals` first. If a date is missing, it may hydrate the
+matrix signal rows from an existing matching `dashboard_snapshots.model_json`
+before falling back to recalculating that missing date.
 
 ## Daily Price Sync
 

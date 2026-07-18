@@ -12,9 +12,11 @@ import pandas as pd
 
 from common import cache_dir, db_path
 from dashboard.health import audit_dashboard_model
+from dashboard.snapshot import dashboard_data_fingerprint, dashboard_snapshot_enabled, load_dashboard_snapshot, save_dashboard_snapshot
 from dashboard.stock_types import annotate_stock_types, filter_by_stock_types, load_stock_type_rules, parse_stock_types
 from dashboard.market_state import compute_dynamic_thresholds, detect
 from dashboard.view_model import build_dashboard_view_model
+from data.db import connect
 from plan.trade_plan import run_trade_plan
 from strategies import sector_screen
 from strategies.coarse.registry import run_combo
@@ -25,47 +27,31 @@ RECENT_HIGH_GOOD_WINDOW_DAYS = 30
 RECENT_HIGH_GOOD_HIGHLIGHT_MIN_COUNT = 4
 RECENT_HIGH_GOOD_CACHE_VERSION = 1
 
+MATRIX_SIGNAL_SCOPE_KEYS = [
+    "source",
+    "strategy",
+    "coarse_strategy",
+    "universe",
+    "universe_index_symbol",
+    "sector",
+    "stock_types",
+    "stock_type_config",
+    "report_date",
+    "top",
+    "sector_top",
+    "combo_top",
+    "combo_strategy_top",
+    "coarse_top",
+    "min_amount",
+]
+
 
 def _recent_hits_cache_path():
     return cache_dir() / "recent_high_good_hits.json"
 
 
 def _dashboard_data_fingerprint() -> dict:
-    path = db_path()
-    if not path.exists():
-        return {"db_path": str(path), "missing": True}
-    tables = {
-        "quotes_daily": ["trade_date", "updated_at"],
-        "financial_reports": ["report_date", "updated_at"],
-        "market_cap_snapshot": ["as_of_date", "updated_at"],
-        "index_constituents": ["constituent_date", "weight_date", "updated_at"],
-        "industry_members": ["updated_at"],
-        "stocks": ["updated_at"],
-    }
-    conn = sqlite3.connect(path)
-    try:
-        fingerprint = {"db_path": str(path), "tables": {}}
-        existing_tables = {
-            str(row[0])
-            for row in conn.execute("select name from sqlite_master where type='table'").fetchall()
-        }
-        for table, date_columns in tables.items():
-            if table not in existing_tables:
-                fingerprint["tables"][table] = {"missing": True}
-                continue
-            columns = {str(row[1]) for row in conn.execute(f"pragma table_info({table})").fetchall()}
-            selected_columns = [column for column in date_columns if column in columns]
-            expressions = ["count(*)", *[f"max({column})" for column in selected_columns]]
-            row = conn.execute(f"select {', '.join(expressions)} from {table}").fetchone()
-            table_fingerprint = {"count": int(row[0] or 0)}
-            for index, column in enumerate(selected_columns, start=1):
-                table_fingerprint[f"max_{column}"] = row[index]
-            fingerprint["tables"][table] = table_fingerprint
-        return fingerprint
-    except Exception:
-        return {"db_path": str(path), "unavailable": True}
-    finally:
-        conn.close()
+    return dashboard_data_fingerprint()
 
 
 def _cache_arg_value(args, key: str):
@@ -75,6 +61,22 @@ def _cache_arg_value(args, key: str):
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value]
     return str(value)
+
+
+def _stable_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _matrix_signal_scope_key(args) -> tuple[str, str]:
+    params = {key: _cache_arg_value(args, key) for key in MATRIX_SIGNAL_SCOPE_KEYS}
+    raw = _stable_json(params)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest(), raw
+
+
+def _matrix_data_fingerprint_key(data_fingerprint: dict | None = None) -> tuple[str, str]:
+    fingerprint = data_fingerprint or _dashboard_data_fingerprint()
+    raw = _stable_json(fingerprint)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest(), raw
 
 
 def _recent_hits_cache_key(model: dict, args, as_of_date: str, signal_dates: list[str], current_codes: set[str]) -> str:
@@ -348,6 +350,196 @@ def _high_good_codes_from_model(model: dict) -> set[str]:
     return set(codes.loc[matched.index].tolist())
 
 
+def _matrix_signal_rows_from_model(model: dict, args) -> tuple[str, list[tuple]]:
+    from backtest.signal_backtest import candidates_from_dashboard_model
+
+    as_of_date = _recent_hit_end_date(model, args)
+    if not as_of_date:
+        return "", []
+    candidates = candidates_from_dashboard_model(model)
+    if candidates.empty or "code" not in candidates.columns:
+        return as_of_date, []
+    thresholds = (model.get("summary") or {}).get("adaptive_thresholds") or {}
+    macro_threshold = float(thresholds.get("macro_potential_threshold") or 80)
+    tech_threshold = float(thresholds.get("technical_timing_threshold") or 75)
+    macro = _score_column(candidates, "combo_score").fillna(_score_column(candidates, "coarse_score")).fillna(0)
+    macro = macro.where(macro > 1, macro * 100)
+    technical = _score_column(candidates, "technical_score").fillna(0)
+    rows = []
+    for index, candidate in candidates.iterrows():
+        code = str(candidate.get("code") or "").zfill(6)
+        if not code or code == "000000":
+            continue
+        macro_score = macro.loc[index]
+        technical_score = technical.loc[index]
+        if pd.isna(macro_score) or pd.isna(technical_score):
+            continue
+        macro_value = float(macro_score)
+        technical_value = float(technical_score)
+        rows.append(
+            (
+                as_of_date,
+                code,
+                str(candidate.get("name") or ""),
+                macro_value,
+                technical_value,
+                macro_threshold,
+                tech_threshold,
+                1 if macro_value >= macro_threshold and technical_value >= tech_threshold else 0,
+            )
+        )
+    return as_of_date, rows
+
+
+def _save_matrix_signal_snapshot(args, model: dict, data_fingerprint: dict | None = None) -> None:
+    if not dashboard_snapshot_enabled(args):
+        return
+    try:
+        as_of_date, signal_rows = _matrix_signal_rows_from_model(model, args)
+        if not as_of_date:
+            return
+        scope_key, params_json = _matrix_signal_scope_key(args)
+        fingerprint_key, fingerprint_json = _matrix_data_fingerprint_key(data_fingerprint)
+        now = datetime.now().isoformat(timespec="seconds")
+        conn = connect()
+        try:
+            conn.execute(
+                """
+                delete from dashboard_matrix_signals
+                where scope_key=? and data_fingerprint_key=? and as_of_date=?
+                """,
+                (scope_key, fingerprint_key, as_of_date),
+            )
+            if signal_rows:
+                conn.executemany(
+                    """
+                    insert into dashboard_matrix_signals(
+                        scope_key, data_fingerprint_key, as_of_date, code, name,
+                        macro_score, technical_score, macro_threshold, technical_threshold,
+                        is_high_good, created_at, params_json, data_fingerprint_json
+                    )
+                    values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (scope_key, fingerprint_key, *row, now, params_json, fingerprint_json)
+                        for row in signal_rows
+                    ],
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        return
+
+
+def _matrix_signal_hits_from_cache(args, current_codes: set[str], signal_dates: list[str]) -> tuple[set[str], dict[str, dict]]:
+    if not current_codes or not signal_dates:
+        return set(), {}
+    scope_key, _params_json = _matrix_signal_scope_key(args)
+    fingerprint_key, _fingerprint_json = _matrix_data_fingerprint_key()
+    placeholders_dates = ",".join(["?"] * len(signal_dates))
+    placeholders_codes = ",".join(["?"] * len(current_codes))
+    conn = connect()
+    try:
+        covered_rows = conn.execute(
+            f"""
+            select distinct as_of_date
+            from dashboard_matrix_signals
+            where scope_key=? and data_fingerprint_key=? and as_of_date in ({placeholders_dates})
+            """,
+            (scope_key, fingerprint_key, *signal_dates),
+        ).fetchall()
+        covered_dates = {str(row[0]) for row in covered_rows if row and row[0]}
+        rows = conn.execute(
+            f"""
+            select code, as_of_date
+            from dashboard_matrix_signals
+            where scope_key=?
+              and data_fingerprint_key=?
+              and as_of_date in ({placeholders_dates})
+              and code in ({placeholders_codes})
+              and is_high_good=1
+            order by as_of_date
+            """,
+            (scope_key, fingerprint_key, *signal_dates, *sorted(current_codes)),
+        ).fetchall()
+    finally:
+        conn.close()
+    window_start, window_end = _recent_hit_bounds(signal_dates[-1])
+    hit_dates_by_code: dict[str, list[str]] = {code: [] for code in current_codes}
+    for code, signal_date in rows:
+        hit_dates_by_code.setdefault(str(code).zfill(6), []).append(str(signal_date))
+    hits = {
+        code: {
+            "count": len(dates),
+            "dates": dates,
+            "window_start": window_start,
+            "window_end": window_end,
+            "highlight": len(dates) >= RECENT_HIGH_GOOD_HIGHLIGHT_MIN_COUNT,
+        }
+        for code, dates in hit_dates_by_code.items()
+        if dates
+    }
+    return covered_dates, hits
+
+
+def _matrix_scope_matches_snapshot(args, snapshot_params: dict) -> bool:
+    snapshot_args = SimpleNamespace(**snapshot_params)
+    return all(
+        _cache_arg_value(snapshot_args, key) == _cache_arg_value(args, key)
+        for key in MATRIX_SIGNAL_SCOPE_KEYS
+    )
+
+
+def _hydrate_matrix_signals_from_dashboard_snapshots(args, signal_dates: list[str], covered_dates: set[str]) -> None:
+    missing_dates = [date for date in signal_dates if date not in covered_dates]
+    if not missing_dates or not dashboard_snapshot_enabled(args):
+        return
+    current_fingerprint_key, _current_fingerprint_json = _matrix_data_fingerprint_key()
+    placeholders = ",".join(["?"] * len(missing_dates))
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"""
+            select as_of_date, params_json, data_fingerprint_json, model_json
+            from dashboard_snapshots
+            where as_of_date in ({placeholders})
+              and source=?
+              and universe=?
+              and universe_index_symbol=?
+            order by created_at desc
+            """,
+            (
+                *missing_dates,
+                str(getattr(args, "source", "") or ""),
+                str(getattr(args, "universe", "") or ""),
+                str(getattr(args, "universe_index_symbol", "") or ""),
+            ),
+        ).fetchall()
+    finally:
+        conn.close()
+    hydrated_dates: set[str] = set()
+    for as_of_date, params_json, data_fingerprint_json, model_json in rows:
+        as_of_date = str(as_of_date or "")
+        if as_of_date in hydrated_dates:
+            continue
+        try:
+            snapshot_params = json.loads(params_json)
+            data_fingerprint = json.loads(data_fingerprint_json)
+            model = json.loads(model_json)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        fingerprint_key, _fingerprint_json = _matrix_data_fingerprint_key(data_fingerprint)
+        if fingerprint_key != current_fingerprint_key:
+            continue
+        if not _matrix_scope_matches_snapshot(args, snapshot_params):
+            continue
+        signal_args = SimpleNamespace(**vars(args))
+        signal_args.as_of_date = as_of_date
+        _save_matrix_signal_snapshot(signal_args, model, data_fingerprint=data_fingerprint)
+        hydrated_dates.add(as_of_date)
+
+
 def _collect_recent_high_good_hits(model: dict, args) -> dict[str, dict]:
     if getattr(args, "_skip_recent_high_good_hits", False):
         return {}
@@ -364,9 +556,22 @@ def _collect_recent_high_good_hits(model: dict, args) -> dict[str, dict]:
     cache_hit, cached_hits = _load_recent_hits_cache(cache_key, current_codes)
     if cache_hit:
         return cached_hits
+    covered_signal_dates, matrix_hits = _matrix_signal_hits_from_cache(args, current_codes, signal_dates)
+    if covered_signal_dates == set(signal_dates):
+        _save_recent_hits_cache(cache_key, matrix_hits)
+        return matrix_hits
+    _hydrate_matrix_signals_from_dashboard_snapshots(args, signal_dates, covered_signal_dates)
+    covered_signal_dates, matrix_hits = _matrix_signal_hits_from_cache(args, current_codes, signal_dates)
+    if covered_signal_dates == set(signal_dates):
+        _save_recent_hits_cache(cache_key, matrix_hits)
+        return matrix_hits
 
     hit_dates_by_code = {code: [] for code in current_codes}
+    for code, info in matrix_hits.items():
+        hit_dates_by_code.setdefault(code, []).extend(str(item) for item in info.get("dates", []) if item)
     for signal_date in signal_dates:
+        if signal_date in covered_signal_dates:
+            continue
         if signal_date == as_of_date:
             signal_model = model
         else:
@@ -396,6 +601,12 @@ def _collect_recent_high_good_hits(model: dict, args) -> dict[str, dict]:
     }
     _save_recent_hits_cache(cache_key, hits)
     return hits
+
+
+def _recent_high_good_hits_enabled(args) -> bool:
+    if getattr(args, "_skip_recent_high_good_hits", False):
+        return False
+    return bool(getattr(args, "recent_high_good_hits", False))
 
 
 def _empty_recent_hit_info(window_start: str, window_end: str) -> dict:
@@ -436,6 +647,12 @@ def _annotate_recent_high_good_hits(model: dict, hits_by_code: dict[str, dict], 
 
 def run_dashboard(args) -> dict:
     """Run each existing stage and return a dashboard view model."""
+
+    snapshot_args = SimpleNamespace(**vars(args))
+    cached = load_dashboard_snapshot(snapshot_args)
+    if cached is not None:
+        _save_matrix_signal_snapshot(snapshot_args, cached)
+        return cached
 
     stock_type_rules = load_stock_type_rules(getattr(args, "stock_type_config", None))
     selected_stock_types = parse_stock_types(getattr(args, "stock_types", ""))
@@ -517,8 +734,10 @@ def run_dashboard(args) -> dict:
     model["summary"]["adaptive_thresholds"] = adaptive_thresholds
     setattr(args, "macro_potential_threshold", adaptive_thresholds.get("macro_potential_threshold"))
     setattr(args, "technical_timing_threshold", adaptive_thresholds.get("technical_timing_threshold"))
-    recent_hits = _collect_recent_high_good_hits(model, args)
-    _annotate_recent_high_good_hits(model, recent_hits, args)
+    _save_matrix_signal_snapshot(snapshot_args, model)
+    if _recent_high_good_hits_enabled(args):
+        recent_hits = _collect_recent_high_good_hits(model, args)
+        _annotate_recent_high_good_hits(model, recent_hits, args)
     model["summary"]["health"] = audit_dashboard_model(model)
     backtest = _build_backtest_model(model, args)
     if backtest is not None:
@@ -529,4 +748,5 @@ def run_dashboard(args) -> dict:
     operation_backtest = _build_operation_backtest_model(model, args)
     if operation_backtest is not None:
         model["operation_backtest"] = operation_backtest
+    save_dashboard_snapshot(snapshot_args, model)
     return model

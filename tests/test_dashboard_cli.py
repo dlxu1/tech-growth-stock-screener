@@ -73,6 +73,17 @@ class DashboardCliTest(unittest.TestCase):
             sys.argv = old_argv
 
         self.assertEqual(args.universe, "csi300")
+        self.assertTrue(args.recent_high_good_hits)
+
+    def test_dashboard_server_can_disable_recent_high_good_hits(self) -> None:
+        old_argv = sys.argv[:]
+        try:
+            sys.argv = ["run.py", "dashboard-server", "--no-recent-high-good-hits"]
+            args = run.parse_args()
+        finally:
+            sys.argv = old_argv
+
+        self.assertFalse(args.recent_high_good_hits)
 
     def test_sync_daily_prices_defaults_to_incremental_skip_existing(self) -> None:
         old_argv = sys.argv[:]

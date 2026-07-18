@@ -219,7 +219,28 @@ to the latest cached `stock_yjbb_YYYYMMDD` source table.
 Reason: the local dashboard should render and expose data-health degradation
 instead of returning HTTP 500 when older report periods were never cached.
 
+## 2026-07-18: Dashboard Model Has A Snapshot Node
+
+Decision: after the dashboard pipeline completes `操作建议`, it builds the full
+dashboard model and persists it to a dedicated `dashboard_snapshots` SQLite
+table. Snapshot reuse is keyed by dashboard parameters plus source-data
+fingerprints, and is enabled by default for dashboard-oriented commands.
+
+Reason: historical dashboard dates are often revisited. Reusing the complete
+model avoids rerunning `股票池 -> 宏观粗筛 -> 技术分析 -> 操作建议` when the same
+parameters and unchanged source data have already produced a model.
+
+Implication: `layer_runs` and `layer_results` remain row-level audit trails for
+individual stages. `dashboard_snapshots` is the complete dashboard-data cache.
+Use `--no-dashboard-cache` to force no reuse, `--rebuild-dashboard-cache` to
+recalculate and replace a matching snapshot, and `--refresh` or
+`--update-policy refresh` for source-data refresh flows.
+
 ## 2026-07-17: Repeated Strong-Signal Stats Are Cached
+
+Superseded on 2026-07-18 by `近 1 月重复强信号改为矩阵信号物化`. The JSON cache
+remains as a final computed-result cache, but SQLite `dashboard_matrix_signals`
+is now the primary acceleration path.
 
 Decision: the `近 1 月重复强信号` calculation keeps its existing semantics but is
 cached. The persistent cache stores computed `recent_high_good_hits` by
@@ -470,3 +491,11 @@ Decision: 对当前矩阵中属于 `好时机+高潜力` 的股票，统计过�
 Reason: 单日落入高潜力+好时机可能是偶然分布位置；连续多次落入同一象限说明这只股票在近期多次同时满足宏观潜力和技术时机，有必要在矩阵上显式提醒，但不能因此直接改变评分公式或操作建议。
 
 Implication: `recent_high_good_hits` 是展示和诊断字段，出现在技术分析/操作建议行中。它不得改变 `combo_score`、`technical_score`、动态阈值、阶段样本、回测样本或操作计划。历史统计递归重跑 dashboard 时必须跳过回测和重复统计，避免递归放大耗时。
+
+## 2026-07-18: 近 1 月重复强信号改为矩阵信号物化
+
+Decision: `recent_high_good_hits` 默认恢复展示，但不再优先递归重跑历史 dashboard。每个 cache-enabled dashboard model 会把矩阵候选的 `combo_score/coarse_score`、`technical_score`、当日动态阈值和 `is_high_good` 写入 `dashboard_matrix_signals`。近 1 月命中次数优先用这张表 SQL 聚合，缺失日期先从已有 `dashboard_snapshots.model_json` 水化，最后才回退重算缺失日期。需要临时关闭展示时传 `--no-recent-high-good-hits`。
+
+Reason: 原实现切换历史日期时需要回看 30 个自然日内多个交易日，并对每个历史信号日重跑 dashboard。2026-07-09 实测首次开启耗时约 113 秒，命中完整缓存后约 1 秒。物化矩阵信号把核心统计从 O(交易日数 × dashboard 四阶段) 改为优先 O(一次 SQL 聚合)。
+
+Implication: `recent_high_good_hits` 仍然只是展示/诊断字段，不改变评分、阈值、样本或操作建议。`dashboard_matrix_signals` 是 dashboard snapshot 的派生加速表，使用矩阵 scope key 和 source-data fingerprint 防止跨参数或跨数据版本复用。

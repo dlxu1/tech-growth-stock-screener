@@ -91,6 +91,19 @@ def add_operation_backtest_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--operation-profit-target", type=float, default=0.05, help="Profit target for operation backtests, e.g. 0.05 means sell at +5%%.")
 
 
+def add_dashboard_cache_args(parser: argparse.ArgumentParser) -> None:
+    cache_group = parser.add_mutually_exclusive_group()
+    cache_group.add_argument("--dashboard-cache", dest="dashboard_cache", action="store_true", default=True, help="Reuse and save complete dashboard model snapshots when request parameters and source-data fingerprints match.")
+    cache_group.add_argument("--no-dashboard-cache", dest="dashboard_cache", action="store_false", help="Disable complete dashboard model snapshot reuse for this run.")
+    parser.add_argument("--rebuild-dashboard-cache", action="store_true", help="Ignore any matching dashboard snapshot, rerun the pipeline, and replace the cached model.")
+
+
+def add_recent_high_good_hits_args(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--with-recent-high-good-hits", dest="recent_high_good_hits", action="store_true", default=True, help="Enable the 30-day high-potential and good-timing hit-count annotation.")
+    group.add_argument("--no-recent-high-good-hits", dest="recent_high_good_hits", action="store_false", help="Disable the 30-day high-potential and good-timing hit-count annotation.")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -228,6 +241,8 @@ def parse_args() -> argparse.Namespace:
     add_backtest_args(dashboard)
     add_operation_backtest_args(dashboard)
     add_common_screen_args(dashboard)
+    add_dashboard_cache_args(dashboard)
+    add_recent_high_good_hits_args(dashboard)
     dashboard.set_defaults(top=5, universe="csi300")
 
     dashboard_server = sub.add_parser(
@@ -260,6 +275,8 @@ def parse_args() -> argparse.Namespace:
     add_backtest_args(dashboard_server)
     add_operation_backtest_args(dashboard_server)
     add_common_screen_args(dashboard_server)
+    add_dashboard_cache_args(dashboard_server)
+    add_recent_high_good_hits_args(dashboard_server)
     dashboard_server.set_defaults(top=5, universe="csi300")
 
     validate_dashboard = sub.add_parser(
@@ -290,6 +307,8 @@ def parse_args() -> argparse.Namespace:
     validate_dashboard.add_argument("--expected-latest-trade-date", help="Expected latest trade date, e.g. 2026-07-10.")
     validate_dashboard.add_argument("--format", choices=["markdown", "json"], default="markdown")
     add_common_screen_args(validate_dashboard)
+    add_dashboard_cache_args(validate_dashboard)
+    add_recent_high_good_hits_args(validate_dashboard)
     validate_dashboard.set_defaults(top=5, universe="csi300")
 
     signal_backtest = sub.add_parser(

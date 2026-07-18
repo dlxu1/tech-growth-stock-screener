@@ -31,6 +31,7 @@ Dashboard-oriented commands default to the cached CSI 300 universe. Use
 
 - `scripts/run.py`: CLI entry point.
 - `scripts/dashboard/pipeline.py`: orchestrates the dashboard stage sequence.
+- `scripts/dashboard/snapshot.py`: reads and writes complete dashboard model snapshots.
 - `scripts/dashboard/stock_types.py`: loads configurable stock-type rules and annotates stock-pool rows.
 - `scripts/dashboard/view_model.py`: normalizes stage DataFrames into JSON for the dashboard.
 - `scripts/reports/dashboard_html.py`: renders the interactive offline dashboard.
@@ -70,10 +71,21 @@ Dashboard-oriented commands default to the cached CSI 300 universe. Use
   without rerunning the pipeline. Full stage tables remain available below the
   candidate overview.
 - The matrix includes a historical date selector. In `dashboard-server` mode,
-  changing the date reloads the dashboard with `as_of_date` and reruns the full
-  serial flow using cached daily quotes up to that date while preserving the
+  changing the date reloads the dashboard with `as_of_date`. A matching
+  `dashboard_snapshots` entry may be reused directly; otherwise the full serial
+  flow reruns using cached daily quotes up to that date while preserving the
   current universe/filter parameters. Static HTML can also be generated for a
   fixed historical date with `--as-of-date`.
+- `recent_high_good_hits` is displayed by default for current `好时机+高潜力`
+  stocks. It counts how many available signal dates in the previous 30 calendar
+  days also landed in `好时机+高潜力`, using each historical date's own adaptive
+  matrix thresholds. The calculation is display-only and must not change scores,
+  thresholds, stage membership, backtest samples, or operation advice. To keep
+  historical date switching fast, dashboard models materialize lightweight
+  matrix rows into `dashboard_matrix_signals`; the repeated-hit annotation first
+  aggregates that table, then hydrates missing dates from matching
+  `dashboard_snapshots`, and only recalculates dates still missing from both.
+  Use `--no-recent-high-good-hits` only as a temporary diagnostic bypass.
 - When signal-validation data is present, the dashboard shows a `信号验证与预警`
   section under `数据回测`. It visualizes the selected signal date's matrix
   quadrant performance and attention-score bucket performance across holding

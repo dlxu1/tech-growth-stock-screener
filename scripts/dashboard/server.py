@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from argparse import Namespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -12,8 +11,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 
-from common import db_path
 from dashboard.pipeline import run_dashboard
+from dashboard.snapshot import dashboard_data_fingerprint
 from reports.dashboard_html import render_dashboard_html
 
 
@@ -45,41 +44,7 @@ def _args_for_request(base_args: Namespace, query: dict[str, list[str]]) -> Simp
 
 
 def _dashboard_data_fingerprint() -> dict:
-    path = db_path()
-    if not path.exists():
-        return {"db_path": str(path), "missing": True}
-    tables = {
-        "quotes_daily": ["trade_date", "updated_at"],
-        "financial_reports": ["report_date", "updated_at"],
-        "market_cap_snapshot": ["as_of_date", "updated_at"],
-        "index_constituents": ["constituent_date", "weight_date", "updated_at"],
-        "industry_members": ["updated_at"],
-        "stocks": ["updated_at"],
-    }
-    conn = sqlite3.connect(path)
-    try:
-        fingerprint = {"db_path": str(path), "tables": {}}
-        existing_tables = {
-            str(row[0])
-            for row in conn.execute("select name from sqlite_master where type='table'").fetchall()
-        }
-        for table, date_columns in tables.items():
-            if table not in existing_tables:
-                fingerprint["tables"][table] = {"missing": True}
-                continue
-            columns = {str(row[1]) for row in conn.execute(f"pragma table_info({table})").fetchall()}
-            selected_columns = [column for column in date_columns if column in columns]
-            expressions = ["count(*)", *[f"max({column})" for column in selected_columns]]
-            row = conn.execute(f"select {', '.join(expressions)} from {table}").fetchone()
-            table_fingerprint = {"count": int(row[0] or 0)}
-            for index, column in enumerate(selected_columns, start=1):
-                table_fingerprint[f"max_{column}"] = row[index]
-            fingerprint["tables"][table] = table_fingerprint
-        return fingerprint
-    except Exception:
-        return {"db_path": str(path), "unavailable": True}
-    finally:
-        conn.close()
+    return dashboard_data_fingerprint()
 
 
 def _response_cache_key(path: str, args: SimpleNamespace) -> str:

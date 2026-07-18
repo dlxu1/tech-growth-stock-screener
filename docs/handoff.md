@@ -47,17 +47,19 @@ Use this file as the first stop when a new thread needs to continue work.
     same audit from the CLI.
   - The potential-timing matrix includes a `历史日期重算` date selector. It is
     useful through `dashboard-server`; choosing a date reloads
-    `/dashboard?as_of_date=YYYY-MM-DD` and reruns the full serial flow using
-    cached daily quotes up to that date.
-  - Current `好时机+高潜力` matrix stocks now carry `recent_high_good_hits`,
-    counting how many available signal dates in the previous 30 calendar days
-    also landed in `好时机+高潜力`. Each historical date uses its own adaptive
-    thresholds. Counts of 4 or more show a special matrix ring/badge and hover
-    dates, plus a note in the right-side stock detail panel. The expensive
-    repeated-hit result is cached in `.cache/recent_high_good_hits.json`, keyed
-    by dashboard date, signal-date window, current high-good codes, relevant
-    dashboard parameters, cache version, and key SQLite table freshness/count
-    fingerprints. The dashboard server also keeps identical URL responses in
+    `/dashboard?as_of_date=YYYY-MM-DD`. A matching `dashboard_snapshots` model
+    can be reused directly; otherwise the full serial flow reruns using cached
+    daily quotes up to that date.
+  - `recent_high_good_hits` is enabled by default again. Current `好时机+高潜力`
+    matrix stocks count how many available signal dates in the previous 30
+    calendar days also landed in `好时机+高潜力`. Each historical date uses its
+    own adaptive thresholds. Counts of 4 or more show a special matrix
+    ring/badge and hover dates, plus a note in the right-side stock detail
+    panel. The expensive repeated-hit path now first aggregates
+    `dashboard_matrix_signals`, then hydrates missing dates from matching
+    `dashboard_snapshots`, and only recalculates still-missing dates. Use
+    `--no-recent-high-good-hits` to temporarily disable the annotation. The
+    dashboard server also keeps identical URL responses in
     memory while that database fingerprint is unchanged, so refreshing the same
     date should avoid the 20+ historical reruns.
   - If the requested historical date is earlier than every cached CSI 300
@@ -103,6 +105,20 @@ Use this file as the first stop when a new thread needs to continue work.
   - Financial-report `--report-date auto` now prefers the latest complete-looking
     cached/fetched `stock_yjbb_YYYYMMDD` table and avoids using an obviously
     incomplete fresh quarter when an older complete report is available.
+  - Dashboard now has a fifth data-generation node after `操作建议`: the complete
+    dashboard model is persisted to `dashboard_snapshots`. `dashboard`,
+    `dashboard-server`, and `validate-dashboard` default to `--dashboard-cache`
+    and can reuse a matching snapshot when dashboard parameters and source-data
+    fingerprints are unchanged. Use `--no-dashboard-cache` to bypass reuse or
+    `--rebuild-dashboard-cache` to rerun and replace the matching snapshot.
+  - A derived matrix-signal cache now lives in `dashboard_matrix_signals`.
+    Cache-enabled dashboard runs materialize one row per matrix candidate per
+    signal date. `recent_high_good_hits` is enabled by default and aggregates
+    this table first, hydrates missing signal dates from `dashboard_snapshots`,
+    and only recalculates dates still missing from both caches. The measured
+    2026-07-09 case dropped from about 113 seconds on first repeated-hit
+    calculation to about 13 seconds when forcing the current date rebuild, and
+    about 1 second when the full dashboard snapshot is reused.
 
 ## Standard Verification
 
@@ -111,6 +127,7 @@ Run these after code changes:
 ```bash
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest discover -s tests
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest tests.test_incremental_sync
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest tests.test_dashboard_pipeline
 git diff --check
 codegraph sync
 ```

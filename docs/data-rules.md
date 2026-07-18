@@ -17,6 +17,8 @@ Default cache path is described in `README.md`. The important tables include:
 - `quotes_daily`
 - `layer_runs`
 - `layer_results`
+- `dashboard_snapshots`
+- `dashboard_matrix_signals`
 
 Prefer cache-backed commands for local iteration:
 
@@ -61,6 +63,47 @@ Source table behavior remains table-specific:
 - Spot quotes, industry boards, industry constituents, and financial-report
   raw tables are source snapshots and may be replaced when their own sync is
   explicitly run.
+- `dashboard_snapshots` stores complete dashboard model JSON after the plan
+  stage and downstream dashboard model enrichment are complete. Snapshot reuse
+  is keyed by dashboard parameters plus source-data fingerprints, not by
+  `layer_results`.
+- `dashboard_matrix_signals` stores lightweight per-date matrix membership
+  derived from dashboard models so repeated `好时机+高潜力` hit counts can be
+  queried without recursively rebuilding every historical dashboard.
+
+## Dashboard Snapshot Cache
+
+Dashboard-oriented commands can reuse complete dashboard data snapshots when
+`--dashboard-cache` is enabled. This is the default for `dashboard`,
+`dashboard-server`, and `validate-dashboard`.
+
+The snapshot node runs after:
+
+```text
+股票池 -> 宏观粗筛 -> 技术分析 -> 操作建议
+```
+
+It stores the final dashboard model in `dashboard_snapshots.model_json`. Later
+requests with the same dashboard parameters and unchanged source-data
+fingerprint can load that model directly instead of recalculating all four
+business stages.
+When a dashboard model is calculated or loaded from a snapshot, the matrix
+membership is also materialized into `dashboard_matrix_signals` when dashboard
+cache is enabled. This derived table is used to aggregate repeated
+`好时机+高潜力` hits across historical signal dates without rebuilding every
+dashboard model in the lookback window.
+
+Snapshot reuse is skipped when:
+
+- `--no-dashboard-cache` is passed;
+- `--rebuild-dashboard-cache` is passed;
+- `--refresh` is passed;
+- `--update-policy refresh` is passed.
+
+`--rebuild-dashboard-cache` reruns the full pipeline and replaces the matching
+snapshot. Historical snapshots should be treated as research replay artifacts:
+they preserve the model produced under the source data fingerprint available at
+the time, and are not direct trade instructions.
 
 ## Stage Contracts
 
@@ -228,22 +271,27 @@ matrix candidates by their configured `stock_type`.
 
 The matrix can be recalculated for a historical date through the local
 dashboard server or a static dashboard generated with `--as-of-date`. Changing
-the date must rerun the serial dashboard flow and rebuild all matrix scores from
-the selected date's available cached data.
-For stocks that are currently classified as `好时机+高潜力`, the dashboard also
-tracks how often they appeared in the same quadrant during the previous 30
-calendar days. Each historical signal date uses that date's own adaptive matrix
-thresholds, not today's thresholds. The count is exposed on fine/plan rows as
+the date may reuse a matching `dashboard_snapshots` model; otherwise it reruns
+the serial dashboard flow and rebuilds all matrix scores from the selected
+date's available cached data.
+The repeated `好时机+高潜力` hit-count diagnostic is enabled by default. Pass
+`--no-recent-high-good-hits` only when temporarily disabling the annotation for
+debugging. The dashboard tracks how often current `好时机+高潜力` stocks appeared
+in the same quadrant during the previous 30 calendar days. Each historical
+signal date uses that date's own adaptive matrix thresholds, not today's
+thresholds. The count is exposed on fine/plan rows as
 `recent_high_good_hits` with `count`, `dates`, `window_start`, `window_end`, and
 `highlight`. `highlight=true` starts at 4 hits, and the HTML matrix renders a
 special ring/badge plus hover dates for those repeated strong signals. This is
 display-only diagnostic context and must not change scores, thresholds, stage
-membership, or operation advice. The computed repeated-signal result is cached
-under `.cache/recent_high_good_hits.json` by dashboard date, signal-date window,
+membership, or operation advice. Each dashboard model also materializes
+per-date matrix signals into `dashboard_matrix_signals`; the repeated-hit
+annotation first aggregates that table, then hydrates missing signal dates from
+existing `dashboard_snapshots`, and only falls back to recalculating missing
+historical dates. The computed repeated-signal result is still cached under
+`.cache/recent_high_good_hits.json` by dashboard date, signal-date window,
 current high-potential+good-timing codes, relevant dashboard parameters, cache
-version, and key SQLite table freshness/count fingerprints. Cache reuse must preserve each
-historical date's own adaptive thresholds; bump the cache version if the
-calculation semantics change.
+version, and key SQLite table freshness/count fingerprints.
 When the CSI 300 constituent cache has no snapshot at or before the selected
 date, historical replay falls back to the latest cached constituent snapshot and
 still applies the selected date cutoff to quotes and financial-report dates.

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -14,10 +16,278 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from dashboard.pipeline import _collect_recent_high_good_hits, run_dashboard
+from dashboard.pipeline import (
+    _collect_recent_high_good_hits,
+    _matrix_data_fingerprint_key,
+    _matrix_signal_scope_key,
+    run_dashboard,
+)
+from dashboard.market_state import MarketState
+from data.db import connect
 
 
 class DashboardPipelineTest(unittest.TestCase):
+    def test_recent_high_good_hits_are_disabled_by_default(self) -> None:
+        args = Namespace(
+            strategy="tech_growth",
+            coarse_strategy="all",
+            top=5,
+            sector_top=100,
+            combo_top=100,
+            coarse_top=5,
+            sector="",
+            stock_types="",
+            stock_type_config="",
+            as_of_date="2026-07-14",
+            backtest_date="",
+            universe="csi300",
+            universe_index_symbol="000300",
+            report_date="auto",
+            source="cache",
+            refresh=False,
+            update_policy="none",
+            dashboard_cache=False,
+            _skip_backtest=True,
+            _skip_signal_validation=True,
+            _skip_operation_backtest=True,
+        )
+        one_row = pd.DataFrame([{"code": "000001", "name": "样本", "board_name": "半导体"}])
+
+        with (
+            patch("dashboard.pipeline.sector_screen.run", return_value=(one_row, {"stage": "sector_screen"})),
+            patch("dashboard.pipeline.run_combo", return_value=(one_row.assign(combo_score=88.0), {"stage": "combo"})),
+            patch("dashboard.pipeline.run_fine", return_value=(one_row.assign(combo_score=88.0, technical_score=76.0), {"stage": "fine"})),
+            patch("dashboard.pipeline.run_trade_plan", return_value=(one_row.assign(action="观察"), {"stage": "plan"})),
+            patch("dashboard.pipeline._collect_recent_high_good_hits", side_effect=AssertionError("recent hits should be skipped")),
+        ):
+            model = run_dashboard(args)
+
+        self.assertNotIn("recent_high_good_hits", model["summary"])
+        for stage in model["stages"]:
+            self.assertNotIn("recent_high_good_hits", stage["columns"])
+            for row in stage["rows"]:
+                self.assertNotIn("recent_high_good_hits", row)
+
+    def test_dashboard_snapshot_is_saved_and_reused_for_same_request(self) -> None:
+        old_db = os.environ.get("TECH_GROWTH_DB")
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                os.environ["TECH_GROWTH_DB"] = str(Path(tmpdir) / "stock_data.sqlite")
+                conn = connect()
+                conn.close()
+                args = Namespace(
+                    strategy="tech_growth",
+                    coarse_strategy="all",
+                    top=5,
+                    sector_top=100,
+                    combo_top=100,
+                    coarse_top=5,
+                    sector="",
+                    stock_types="",
+                    stock_type_config="",
+                    as_of_date="2026-07-14",
+                    backtest_date="",
+                    universe="csi300",
+                    universe_index_symbol="000300",
+                    report_date="auto",
+                    source="cache",
+                    refresh=False,
+                    update_policy="none",
+                    dashboard_cache=True,
+                    rebuild_dashboard_cache=False,
+                    _skip_backtest=True,
+                    _skip_signal_validation=True,
+                    _skip_operation_backtest=True,
+                    _skip_recent_high_good_hits=True,
+                )
+                one_row = pd.DataFrame([{"code": "000001", "name": "样本", "board_name": "半导体"}])
+                combo_rows = one_row.assign(combo_score=88.0)
+                fine_rows = one_row.assign(combo_score=88.0, technical_score=76.0)
+                plan_rows = one_row.assign(action="观察")
+
+                with (
+                    patch("dashboard.pipeline.sector_screen.run", return_value=(one_row, {"stage": "sector_screen"})) as sector_run,
+                    patch("dashboard.pipeline.run_combo", return_value=(combo_rows, {"stage": "combo"})) as combo_run,
+                    patch("dashboard.pipeline.run_fine", return_value=(fine_rows, {"stage": "fine"})) as fine_run,
+                    patch("dashboard.pipeline.run_trade_plan", return_value=(plan_rows, {"stage": "plan"})) as plan_run,
+                ):
+                    first = run_dashboard(args)
+
+                self.assertEqual(first["summary"]["dashboard_snapshot"]["cache_status"], "saved")
+                with sqlite3.connect(os.environ["TECH_GROWTH_DB"]) as conn:
+                    count = conn.execute("select count(*) from dashboard_snapshots").fetchone()[0]
+                    model_json = conn.execute("select model_json from dashboard_snapshots").fetchone()[0]
+                self.assertEqual(count, 1)
+                self.assertEqual(json.loads(model_json)["summary"]["as_of_date"], "2026-07-14")
+                self.assertEqual(sector_run.call_count, 1)
+                self.assertEqual(combo_run.call_count, 1)
+                self.assertEqual(fine_run.call_count, 1)
+                self.assertEqual(plan_run.call_count, 1)
+
+                with (
+                    patch("dashboard.pipeline.sector_screen.run", side_effect=AssertionError("sector should not rerun")),
+                    patch("dashboard.pipeline.run_combo", side_effect=AssertionError("combo should not rerun")),
+                    patch("dashboard.pipeline.run_fine", side_effect=AssertionError("fine should not rerun")),
+                    patch("dashboard.pipeline.run_trade_plan", side_effect=AssertionError("plan should not rerun")),
+                ):
+                    cached = run_dashboard(args)
+
+                self.assertEqual(cached["summary"]["dashboard_snapshot"]["cache_status"], "hit")
+                self.assertEqual(cached["summary"]["stage_counts"], first["summary"]["stage_counts"])
+                self.assertEqual(cached["stages"][-1]["rows"][0]["action"], "观察")
+        finally:
+            if old_db is None:
+                os.environ.pop("TECH_GROWTH_DB", None)
+            else:
+                os.environ["TECH_GROWTH_DB"] = old_db
+
+    def test_rebuild_dashboard_cache_ignores_existing_snapshot(self) -> None:
+        old_db = os.environ.get("TECH_GROWTH_DB")
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                os.environ["TECH_GROWTH_DB"] = str(Path(tmpdir) / "stock_data.sqlite")
+                args = Namespace(
+                    strategy="tech_growth",
+                    coarse_strategy="all",
+                    top=5,
+                    sector_top=100,
+                    combo_top=100,
+                    coarse_top=5,
+                    sector="",
+                    stock_types="",
+                    stock_type_config="",
+                    as_of_date="2026-07-14",
+                    backtest_date="",
+                    universe="csi300",
+                    universe_index_symbol="000300",
+                    report_date="auto",
+                    source="cache",
+                    refresh=False,
+                    update_policy="none",
+                    dashboard_cache=True,
+                    rebuild_dashboard_cache=False,
+                    _skip_backtest=True,
+                    _skip_signal_validation=True,
+                    _skip_operation_backtest=True,
+                    _skip_recent_high_good_hits=True,
+                )
+                one_row = pd.DataFrame([{"code": "000001", "name": "样本", "board_name": "半导体"}])
+
+                with (
+                    patch("dashboard.pipeline.sector_screen.run", return_value=(one_row, {"stage": "sector_screen"})),
+                    patch("dashboard.pipeline.run_combo", return_value=(one_row.assign(combo_score=80), {"stage": "combo"})),
+                    patch("dashboard.pipeline.run_fine", return_value=(one_row.assign(combo_score=80, technical_score=70), {"stage": "fine"})),
+                    patch("dashboard.pipeline.run_trade_plan", return_value=(one_row.assign(action="观察"), {"stage": "plan"})),
+                ):
+                    run_dashboard(args)
+
+                args.rebuild_dashboard_cache = True
+                refreshed_plan = one_row.assign(action="等待回踩买入")
+                with (
+                    patch("dashboard.pipeline.sector_screen.run", return_value=(one_row, {"stage": "sector_screen"})) as sector_run,
+                    patch("dashboard.pipeline.run_combo", return_value=(one_row.assign(combo_score=90), {"stage": "combo"})),
+                    patch("dashboard.pipeline.run_fine", return_value=(one_row.assign(combo_score=90, technical_score=82), {"stage": "fine"})),
+                    patch("dashboard.pipeline.run_trade_plan", return_value=(refreshed_plan, {"stage": "plan"})),
+                ):
+                    rebuilt = run_dashboard(args)
+
+                self.assertEqual(sector_run.call_count, 1)
+                self.assertEqual(rebuilt["summary"]["dashboard_snapshot"]["cache_status"], "saved")
+                self.assertEqual(rebuilt["stages"][-1]["rows"][0]["action"], "等待回踩买入")
+        finally:
+            if old_db is None:
+                os.environ.pop("TECH_GROWTH_DB", None)
+            else:
+                os.environ["TECH_GROWTH_DB"] = old_db
+
+    def test_dashboard_snapshot_reuses_original_request_params_after_position_adjustment(self) -> None:
+        old_db = os.environ.get("TECH_GROWTH_DB")
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                os.environ["TECH_GROWTH_DB"] = str(Path(tmpdir) / "stock_data.sqlite")
+
+                def make_args() -> Namespace:
+                    return Namespace(
+                        strategy="tech_growth",
+                        coarse_strategy="all",
+                        top=5,
+                        sector_top=100,
+                        combo_top=100,
+                        coarse_top=5,
+                        combo_strategy_top=20,
+                        min_amount=20000000.0,
+                        breakout_buffer=0.003,
+                        volume_multiplier=1.2,
+                        stop_pct=0.05,
+                        atr_stop_multiplier=1.5,
+                        max_gap_up=0.05,
+                        move_stop_profit=0.05,
+                        trailing_profit=0.08,
+                        trailing_drawdown=0.06,
+                        max_position=0.25,
+                        backtest_top=10,
+                        holding_days="7,14,21",
+                        operation_profit_target=0.05,
+                        sector="",
+                        stock_types="",
+                        stock_type_config="",
+                        as_of_date="2026-07-09",
+                        backtest_date="2026-07-14",
+                        universe="csi300",
+                        universe_index_symbol="000300",
+                        report_date="auto",
+                        source="cache",
+                        refresh=False,
+                        update_policy="none",
+                        dashboard_cache=True,
+                        rebuild_dashboard_cache=False,
+                        recent_high_good_hits=False,
+                        _skip_backtest=True,
+                        _skip_signal_validation=True,
+                        _skip_operation_backtest=True,
+                        _skip_recent_high_good_hits=True,
+                    )
+
+                one_row = pd.DataFrame([{"code": "000001", "name": "样本", "board_name": "半导体"}])
+                defensive_state = MarketState(
+                    label="bear",
+                    regime="bear",
+                    median_close_vs_ma20=0.9,
+                    median_ma20_slope=-0.1,
+                    breadth_pct=20.0,
+                    bull_votes=0,
+                    sample_count=1,
+                    position_multiplier=0.6,
+                    note="测试防御模式",
+                )
+
+                with (
+                    patch("dashboard.pipeline.sector_screen.run", return_value=(one_row, {"stage": "sector_screen"})),
+                    patch("dashboard.pipeline.detect", return_value=defensive_state),
+                    patch("dashboard.pipeline.run_combo", return_value=(one_row.assign(combo_score=88.0), {"stage": "combo"})),
+                    patch("dashboard.pipeline.run_fine", return_value=(one_row.assign(combo_score=88.0, technical_score=76.0), {"stage": "fine"})),
+                    patch("dashboard.pipeline.run_trade_plan", return_value=(one_row.assign(action="观察"), {"stage": "plan"})),
+                ):
+                    first = run_dashboard(make_args())
+
+                self.assertEqual(first["summary"]["dashboard_snapshot"]["cache_status"], "saved")
+
+                with (
+                    patch("dashboard.pipeline.sector_screen.run", side_effect=AssertionError("sector should not rerun")),
+                    patch("dashboard.pipeline.detect", side_effect=AssertionError("detect should not rerun")),
+                    patch("dashboard.pipeline.run_combo", side_effect=AssertionError("combo should not rerun")),
+                    patch("dashboard.pipeline.run_fine", side_effect=AssertionError("fine should not rerun")),
+                    patch("dashboard.pipeline.run_trade_plan", side_effect=AssertionError("plan should not rerun")),
+                ):
+                    cached = run_dashboard(make_args())
+
+                self.assertEqual(cached["summary"]["dashboard_snapshot"]["cache_status"], "hit")
+        finally:
+            if old_db is None:
+                os.environ.pop("TECH_GROWTH_DB", None)
+            else:
+                os.environ["TECH_GROWTH_DB"] = old_db
+
     def test_runs_all_stages_and_builds_view_model(self) -> None:
         args = Namespace(strategy="tech_growth", coarse_strategy="all", top=5, sector_top=100, coarse_top=5, sector="半导体")
         one_row = pd.DataFrame([{"code": "000725", "name": "京东方A"}])
@@ -177,6 +447,7 @@ class DashboardPipelineTest(unittest.TestCase):
             stock_types="",
             stock_type_config="",
             as_of_date="2026-07-16",
+            recent_high_good_hits=True,
             _skip_backtest=True,
             _skip_signal_validation=True,
             _skip_operation_backtest=True,
@@ -269,6 +540,79 @@ class DashboardPipelineTest(unittest.TestCase):
         self.assertEqual(hits["000001"]["count"], 2)
         self.assertEqual(hits["000001"]["dates"], ["2026-07-01", "2026-07-16"])
 
+    def test_recent_hit_collection_uses_matrix_signal_snapshots_without_rerunning_dashboard(self) -> None:
+        old_db = os.environ.get("TECH_GROWTH_DB")
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                os.environ["TECH_GROWTH_DB"] = str(Path(tmpdir) / "stock_data.sqlite")
+                args = Namespace(
+                    as_of_date="2026-07-16",
+                    source="cache",
+                    strategy="tech_growth",
+                    coarse_strategy="all",
+                    universe="csi300",
+                    universe_index_symbol="000300",
+                    sector="",
+                    stock_types="",
+                    stock_type_config="",
+                    report_date="auto",
+                    top=5,
+                    sector_top=100,
+                    combo_top=100,
+                    combo_strategy_top=20,
+                    coarse_top=5,
+                    min_amount=20000000.0,
+                )
+                current_model = {
+                    "summary": {
+                        "as_of_date": "2026-07-16",
+                        "adaptive_thresholds": {"macro_potential_threshold": 80, "technical_timing_threshold": 75},
+                    },
+                    "stages": [
+                        {"key": "fine", "rows": [{"code": "000001", "name": "样本", "combo_score": 90.0, "technical_score": 80.0}]},
+                    ],
+                }
+                conn = connect()
+                try:
+                    scope_key, params_json = _matrix_signal_scope_key(args)
+                    fingerprint_key, fingerprint_json = _matrix_data_fingerprint_key()
+                    rows = [
+                        ("2026-07-01", "000001", "样本", 90.0, 80.0, 80.0, 75.0, 1),
+                        ("2026-07-02", "000001", "样本", 90.0, 80.0, 95.0, 90.0, 0),
+                        ("2026-07-16", "000001", "样本", 90.0, 80.0, 80.0, 75.0, 1),
+                    ]
+                    conn.executemany(
+                        """
+                        insert into dashboard_matrix_signals(
+                            scope_key, data_fingerprint_key, as_of_date, code, name,
+                            macro_score, technical_score, macro_threshold, technical_threshold,
+                            is_high_good, created_at, params_json, data_fingerprint_json
+                        )
+                        values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-07-18T00:00:00', ?, ?)
+                        """,
+                        [
+                            (scope_key, fingerprint_key, *row, params_json, fingerprint_json)
+                            for row in rows
+                        ],
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+                with (
+                    patch("dashboard.pipeline._recent_signal_dates", return_value=["2026-07-01", "2026-07-02", "2026-07-16"]),
+                    patch("dashboard.pipeline.run_dashboard", side_effect=AssertionError("historical dashboard should not rerun")),
+                ):
+                    hits = _collect_recent_high_good_hits(current_model, args)
+
+                self.assertEqual(hits["000001"]["count"], 2)
+                self.assertEqual(hits["000001"]["dates"], ["2026-07-01", "2026-07-16"])
+        finally:
+            if old_db is None:
+                os.environ.pop("TECH_GROWTH_DB", None)
+            else:
+                os.environ["TECH_GROWTH_DB"] = old_db
+
     def test_recent_hit_collection_reuses_persistent_cache_for_same_identity(self) -> None:
         args = Namespace(as_of_date="2026-07-16", universe="csi300", universe_index_symbol="000300", stock_types="")
         current_model = {
@@ -292,7 +636,11 @@ class DashboardPipelineTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             old_cache = os.environ.get("TECH_GROWTH_SCREENER_CACHE")
+            old_db = os.environ.get("TECH_GROWTH_DB")
             os.environ["TECH_GROWTH_SCREENER_CACHE"] = tmp
+            os.environ["TECH_GROWTH_DB"] = str(Path(tmp) / "stock_data.sqlite")
+            conn = connect()
+            conn.close()
             try:
                 with (
                     patch("dashboard.pipeline._recent_signal_dates", return_value=["2026-07-01", "2026-07-16"]),
@@ -305,6 +653,10 @@ class DashboardPipelineTest(unittest.TestCase):
                     os.environ.pop("TECH_GROWTH_SCREENER_CACHE", None)
                 else:
                     os.environ["TECH_GROWTH_SCREENER_CACHE"] = old_cache
+                if old_db is None:
+                    os.environ.pop("TECH_GROWTH_DB", None)
+                else:
+                    os.environ["TECH_GROWTH_DB"] = old_db
 
         self.assertEqual(first, second)
         self.assertEqual(first["000001"]["dates"], ["2026-07-01", "2026-07-16"])

@@ -145,9 +145,47 @@ def init_schema(conn: sqlite3.Connection) -> None:
             created_at text not null
         );
 
+        create table if not exists dashboard_snapshots (
+            id integer primary key autoincrement,
+            snapshot_key text not null unique,
+            as_of_date text,
+            backtest_date text,
+            universe text,
+            universe_index_symbol text,
+            sector text,
+            stock_types text,
+            report_date text,
+            source text,
+            created_at text not null,
+            data_fingerprint_json text not null,
+            params_json text not null,
+            model_json text not null,
+            html_path text
+        );
+
+        create table if not exists dashboard_matrix_signals (
+            id integer primary key autoincrement,
+            scope_key text not null,
+            data_fingerprint_key text not null,
+            as_of_date text not null,
+            code text not null,
+            name text,
+            macro_score real,
+            technical_score real,
+            macro_threshold real,
+            technical_threshold real,
+            is_high_good integer not null,
+            created_at text not null,
+            params_json text not null,
+            data_fingerprint_json text not null,
+            unique(scope_key, data_fingerprint_key, as_of_date, code)
+        );
+
         create index if not exists idx_layer_runs_layer_run_at on layer_runs(layer, run_at);
         create index if not exists idx_layer_results_run_id on layer_results(run_id);
         create index if not exists idx_layer_results_code on layer_results(code);
+        create index if not exists idx_dashboard_snapshots_dates on dashboard_snapshots(as_of_date, backtest_date);
+        create index if not exists idx_dashboard_matrix_signals_lookup on dashboard_matrix_signals(scope_key, data_fingerprint_key, as_of_date, code, is_high_good);
         """
     )
     conn.commit()
