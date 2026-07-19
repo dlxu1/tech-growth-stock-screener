@@ -34,3 +34,20 @@ services:
       TECH_GROWTH_SCREENER_CACHE: /app/.cache
       TECH_GROWTH_DB: /app/.cache/stock_data.sqlite
     command: ["python", "scripts/docker_update.py"]
+
+  update-report:
+    build:
+      context: .
+      args:
+        APT_MIRROR: https://mirrors.aliyun.com/debian
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple
+    image: tech-growth-stock-screener:latest
+    profiles:
+      - manual
+    volumes:
+      - ./nas-cache:/app/.cache
+    environment:
+      TZ: Asia/Shanghai
+      TECH_GROWTH_SCREENER_CACHE: /app/.cache
+      TECH_GROWTH_DB: /app/.cache/stock_data.sqlite
+    command: ["python", "scripts/docker_update_report.py"]

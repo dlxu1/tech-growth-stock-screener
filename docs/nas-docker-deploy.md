@@ -120,6 +120,24 @@ docker compose run --rm update >> /vol1/docker/tech-growth-stock-screener/nas-ca
 当天行情会写入 SQLite 的 `quotes_daily` 表。SQLite 文件不是简单在末尾追加文本，
 而是由数据库执行 upsert/跳过等写入逻辑，避免同一股票同一交易日重复堆积记录。
 
+如果需要在更新后生成邮件日报，可以运行：
+
+```bash
+docker compose run --rm update-report
+```
+
+这个任务会先执行同样的数据更新流程，然后用最新缓存数据重跑一次 dashboard 模型，
+并生成：
+
+```text
+nas-cache/reports/daily_email_latest.txt
+nas-cache/reports/daily_email_subject.txt
+nas-cache/reports/daily_email_latest.json
+```
+
+邮件日报包含数据健康度，以及最多 10 只当前矩阵第一象限
+`好时机+高潜力` 股票及其下一交易日规则化操作指南。
+
 ## NAS 定时任务
 
 如果 NAS 支持计划任务，可以每天收盘后执行：
@@ -195,6 +213,38 @@ tail -20 /vol1/docker/tech-growth-stock-screener/nas-cache/cron-test.log
 ```
 
 确认有时间输出后，记得从 `crontab -e` 删除这条测试任务，只保留股票更新任务。
+
+### 定时更新并发送邮件
+
+如果 NAS 主机已经配置好 `mail/msmtp`，推荐让 cron 调用项目自带包装脚本：
+
+```cron
+0 17 * * 1-5 MAIL_TO="your_email@example.com" /vol1/docker/tech-growth-stock-screener/scripts/nas_update_and_mail.sh
+```
+
+把 `your_email@example.com` 换成实际收件邮箱。这个脚本在 NAS 主机上执行，
+会调用：
+
+```bash
+docker compose run --rm update-report
+```
+
+成功时发送 `nas-cache/reports/daily_email_latest.txt`，主题来自
+`nas-cache/reports/daily_email_subject.txt`。如果数据更新或 dashboard 计算失败，
+脚本也会发送失败邮件，正文包含 `nas-cache/update.log` 的最后 200 行，方便排查。
+
+手动测试发信流程可以运行：
+
+```bash
+cd /vol1/docker/tech-growth-stock-screener
+MAIL_TO="your_email@example.com" scripts/nas_update_and_mail.sh
+```
+
+脚本默认使用 `/usr/bin/docker` 和 `mail`。如果 NAS 上路径不同，可以用环境变量覆盖：
+
+```bash
+MAIL_TO="your_email@example.com" DOCKER_BIN="/usr/bin/docker" MAIL_BIN="/usr/bin/mail" scripts/nas_update_and_mail.sh
+```
 
 ## 常用命令
 

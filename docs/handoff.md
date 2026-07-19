@@ -129,6 +129,12 @@ Use this file as the first stop when a new thread needs to continue work.
     执行 `docker compose run --rm update`、理解 `update.log` 重定向，以及
     `/app/.cache/stock_data.sqlite` 到 NAS 主机 `nas-cache/stock_data.sqlite`
     的 Docker volume 映射关系。
+  - 新增每日邮件日报流水线：`docker compose run --rm update-report` 会增量
+    更新数据、重跑 dashboard、生成 `nas-cache/reports/daily_email_latest.txt`
+    和主题/JSON 文件；`scripts/nas_update_and_mail.sh` 在 NAS 主机上调用
+    `mail/msmtp` 发信，成功时发送健康度与最多 10 只 `好时机+高潜力` 股票的
+    操作指南，失败时发送 `update.log` 最后 200 行。推荐 cron：
+    `0 17 * * 1-5 MAIL_TO="your_email@example.com" /vol1/docker/tech-growth-stock-screener/scripts/nas_update_and_mail.sh`。
 
 ## Standard Verification
 
