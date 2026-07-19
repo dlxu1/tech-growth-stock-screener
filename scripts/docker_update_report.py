@@ -7,6 +7,11 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
 from common import DEFAULT_KEYWORDS, cache_dir
 from dashboard.pipeline import run_dashboard
 from docker_update import main as update_main
@@ -93,7 +98,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    ROOT = Path(__file__).resolve().parents[1]
-    if str(ROOT / "scripts") not in sys.path:
-        sys.path.insert(0, str(ROOT / "scripts"))
     raise SystemExit(main())
