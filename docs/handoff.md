@@ -124,6 +124,11 @@ Use this file as the first stop when a new thread needs to continue work.
     推荐常驻运行 `dashboard-server --source cache --host 0.0.0.0 --port 5001`，
     通过 `nas-cache:/app/.cache` 持久化 SQLite 缓存、dashboard 快照和报表。
     NAS 浏览器入口为 `http://NAS_IP:5001/dashboard`。
+  - `docs/nas-docker-deploy.md` 已补充 NAS cron 定时更新说明：如何判断
+    cron 是否可用、查看/编辑当前用户和 root 的定时任务、配置工作日 17:00
+    执行 `docker compose run --rm update`、理解 `update.log` 重定向，以及
+    `/app/.cache/stock_data.sqlite` 到 NAS 主机 `nas-cache/stock_data.sqlite`
+    的 Docker volume 映射关系。
 
 ## Standard Verification
 
