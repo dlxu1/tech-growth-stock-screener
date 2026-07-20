@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd
 
+from dashboard.horizon_tags import annotate_horizon
 from dashboard.stock_types import StockTypeRules, classify_stock_type
 
 
@@ -85,6 +86,39 @@ def _stock_type_counts(rows: list[dict]) -> dict[str, int]:
     return counts
 
 
+def _rows_by_code(rows: list[dict]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for row in rows:
+        code = str(row.get("code") or "").zfill(6)
+        if code and code != "000000":
+            out[code] = row
+    return out
+
+
+def _annotate_horizon_rows(stage_models: list[dict]) -> None:
+    by_stage = {stage["key"]: stage for stage in stage_models}
+    combo_by_code = _rows_by_code((by_stage.get("combo") or {}).get("rows", []))
+    fine_by_code = _rows_by_code((by_stage.get("fine") or {}).get("rows", []))
+    plan_stage = by_stage.get("plan")
+    if not plan_stage:
+        return
+    annotated = []
+    for row in plan_stage.get("rows", []):
+        code = str(row.get("code") or "").zfill(6)
+        context = {
+            **combo_by_code.get(code, {}),
+            **fine_by_code.get(code, {}),
+            **row,
+        }
+        annotated.append(annotate_horizon(context))
+    plan_stage["rows"] = annotated
+    columns = list(plan_stage.get("columns") or [])
+    for col in ["horizon_tags", "primary_horizon", "horizon_reason", "horizon_data_note"]:
+        if col not in columns:
+            columns.append(col)
+    plan_stage["columns"] = columns
+
+
 def build_dashboard_view_model(
     stages: dict[str, pd.DataFrame],
     metas: dict[str, dict],
@@ -93,7 +127,6 @@ def build_dashboard_view_model(
     """Normalize stage outputs into one dashboard model."""
 
     stage_models = []
-    traces: dict[str, list[dict]] = {}
     stage_counts = {}
     action_counts = {}
 
@@ -120,7 +153,12 @@ def build_dashboard_view_model(
                 action = row.get("action")
                 if action:
                     action_counts[action] = action_counts.get(action, 0) + 1
-        for row in rows:
+
+    _annotate_horizon_rows(stage_models)
+    traces: dict[str, list[dict]] = {}
+    for stage in stage_models:
+        key = stage["key"]
+        for row in stage.get("rows", []):
             code = str(row.get("code") or "").zfill(6)
             if not code or code == "000000":
                 continue

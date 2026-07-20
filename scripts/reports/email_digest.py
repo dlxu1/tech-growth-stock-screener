@@ -55,6 +55,19 @@ def _format_pct(value: Any) -> str:
     return f"{number:.2f}%"
 
 
+def _horizon_tags(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    if isinstance(value, str) and value.strip():
+        return [item.strip() for item in value.replace("、", "/").split("/") if item.strip()]
+    return []
+
+
+def _format_horizon_tags(value: Any) -> str:
+    tags = _horizon_tags(value)
+    return " / ".join(tags) if tags else "证据不足，需人工复核"
+
+
 def _health_date(health: dict) -> str:
     freshness = health.get("freshness") or {}
     return str(freshness.get("latest_trade_date") or date.today().isoformat())
@@ -130,6 +143,10 @@ def _candidate_rows(model: dict) -> list[dict]:
                 "planned_entry": plan.get("planned_entry"),
                 "initial_stop": plan.get("initial_stop"),
                 "risk_pct": plan.get("risk_pct"),
+                "horizon_tags": _horizon_tags(plan.get("horizon_tags")),
+                "primary_horizon": plan.get("primary_horizon"),
+                "horizon_reason": _text(plan.get("horizon_reason"), ""),
+                "horizon_data_note": _text(plan.get("horizon_data_note"), ""),
                 "take_profit_1r": plan.get("take_profit_1r"),
                 "take_profit_2r": plan.get("take_profit_2r"),
                 "plan_note": _text(plan.get("plan_note")),
@@ -151,6 +168,9 @@ def _candidate_lines(candidates: list[dict], total: int) -> list[str]:
                 f"   技术时机：{_format_number(item.get('technical_score'))}",
                 f"   综合关注：{_format_number(item.get('attention_score'))}",
                 f"   操作建议：{item.get('action')}",
+                f"   适合周期：{_format_horizon_tags(item.get('horizon_tags'))}",
+                f"   优先关注：{_text(item.get('primary_horizon'), '证据不足')}",
+                f"   周期说明：{_text(item.get('horizon_reason') or item.get('horizon_data_note'), '需人工复核')}",
                 f"   最新价：{_format_number(item.get('latest_close'))}",
                 f"   计划入场：{_format_number(item.get('planned_entry'))}",
                 f"   初始止损：{_format_number(item.get('initial_stop'))}",

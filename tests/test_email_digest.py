@@ -39,6 +39,10 @@ class EmailDigestTest(unittest.TestCase):
                     "plan_note": "等待明日触发条件。",
                     "attention_score": combo_score * 0.65 + technical_score * 0.35,
                     "usable_for_plan": True,
+                    "horizon_tags": ["中线", "短线"],
+                    "primary_horizon": "短线",
+                    "horizon_reason": "宏观潜力与技术时机共振，且已有可执行操作计划。",
+                    "horizon_data_note": "",
                 }
             )
         combo_rows.append({"code": "000001", "name": "非第一象限", "combo_score": 70})
@@ -80,11 +84,16 @@ class EmailDigestTest(unittest.TestCase):
         self.assertIn("操作建议：条件买入", digest.body)
         self.assertIn("计划入场：10.50", digest.body)
         self.assertIn("风险比例：3.50%", digest.body)
+        self.assertIn("适合周期：中线 / 短线", digest.body)
+        self.assertIn("优先关注：短线", digest.body)
+        self.assertIn("周期说明：宏观潜力与技术时机共振，且已有可执行操作计划。", digest.body)
         self.assertNotIn("600010 第一象限10", digest.body)
         self.assertNotIn("000001 非第一象限", digest.body)
         self.assertNotIn("预算", digest.body)
         self.assertEqual(10, len(digest.payload["candidates"]))
         self.assertEqual(12, digest.payload["candidate_total"])
+        self.assertEqual(["中线", "短线"], digest.payload["candidates"][0]["horizon_tags"])
+        self.assertEqual("短线", digest.payload["candidates"][0]["primary_horizon"])
 
     def test_renders_empty_candidate_message(self) -> None:
         model = {

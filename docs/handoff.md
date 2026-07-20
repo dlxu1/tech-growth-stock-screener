@@ -135,6 +135,18 @@ Use this file as the first stop when a new thread needs to continue work.
     `mail/msmtp` 发信，成功时发送健康度与最多 10 只 `好时机+高潜力` 股票的
     操作指南，失败时发送 `update.log` 最后 200 行。推荐 cron：
     `0 17 * * 1-5 MAIL_TO="your_email@example.com" /vol1/docker/tech-growth-stock-screener/scripts/nas_update_and_mail.sh`。
+  - `好时机+高潜力` 候选股现在带有展示用投资周期字段：
+    `horizon_tags`、`primary_horizon`、`horizon_reason` 和
+    `horizon_data_note`。UI 文案为 `适合周期` 和 `优先关注`，显示在选中股票
+    详情和操作建议表内，不放在顶部全局栏。分类规则只消费现有宏观、技术和
+    操作计划字段，不改变评分、阈值、阶段成员或回测样本。
+  - 顶部数据健康栏现在展示全局 `策略口径` 和 `权重版本`。`权重版本` hover
+    会解释 `牛市动量版`、`震荡防御版` 或 `熊市防御版` 对应的权重含义。
+  - 每日邮件中每只 `好时机+高潜力` 候选股现在包含 `适合周期`、`优先关注`
+    和 `周期说明`，JSON payload 同步包含 horizon 字段；邮件不重新计算周期
+    规则，只消费 dashboard model。
+  - OpenSpec change `add-horizon-tags-to-high-potential-good-timing` 已创建，
+    并已同步主 spec 到 `openspec/specs/dashboard/spec.md`。
 
 ## Standard Verification
 
@@ -170,6 +182,8 @@ Focused dashboard checks:
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest tests.test_dashboard_html
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest tests.test_dashboard_pipeline
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest tests.test_dashboard_view_model
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest tests.test_horizon_tags
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python -m unittest tests.test_email_digest
 ```
 
 ## New Thread Prompt

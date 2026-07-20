@@ -245,6 +245,10 @@ Expected display fields include:
 - `name`
 - `technical_score`
 - `action`
+- `horizon_tags`
+- `primary_horizon`
+- `horizon_reason`
+- `horizon_data_note`
 - `latest_close`
 - `planned_entry`
 - `initial_stop`
@@ -255,6 +259,42 @@ Expected display fields include:
 
 Keep language conservative: use `观察`, `条件买入`, `等待回踩`, `等待放量确认`,
 or `暂不交易`, and include risk/data limitations when relevant.
+
+Investment horizon annotations are display-only research notes generated from
+the merged macro, technical, and operation-plan context. They must not change
+scores, thresholds, stage membership, sorting, operation-plan rules, dashboard
+snapshot identity, or backtest samples.
+
+- `horizon_tags`: list of applicable labels, displayed as `适合周期`. The fixed
+  order is `长线`, `中线`, `短线`.
+- `primary_horizon`: the current priority label, displayed as `优先关注`.
+- `horizon_reason`: short Chinese explanation for assigned labels.
+- `horizon_data_note`: conservative data-quality note, usually
+  `证据不足，需人工复核` when no label is assigned.
+
+Current horizon rules:
+
+- `长线`: requires `quality_score >= 75`, `risk_control_score >= 65`,
+  `growth_score >= 60`, and at least one quality/value/growth strategy hint
+  such as `高 ROE + 合理估值`, `高毛利率 + 营收增长`, `市值前排 + 营收净利双增长`,
+  `低 PE + 正增长`, `低 PB + 正盈利`, or `回撤较小 + 正增长`.
+- `中线`: requires macro potential and technical timing共振, currently
+  `combo_score >= 80` and `technical_score >= 75`.
+- `短线`: requires an executable plan: `usable_for_plan` true,
+  `primary_strategy` in `breakout_buy`, `pullback_ma_buy`,
+  `volume_confirm_buy`, valid positive `planned_entry` and `initial_stop`, and
+  `0 < risk_pct <= 0.12`.
+
+The dashboard operation-advice table may show `horizon_tags` as `适合周期`.
+The selected-stock detail panel should show `适合周期` and `优先关注` inside the
+stock detail area, not as top-level global dashboard facts.
+
+Daily email summaries must consume these dashboard model fields for
+`好时机+高潜力` candidates. The email body shows `适合周期`, `优先关注`, and
+`周期说明`; the JSON payload keeps `horizon_tags`, `primary_horizon`,
+`horizon_reason`, and `horizon_data_note`. If fields are missing, email output
+falls back to `适合周期：证据不足，需人工复核` and keeps the existing research-risk
+disclaimer.
 
 ### 潜力-时机矩阵
 
@@ -476,6 +516,19 @@ The audit checks:
 The dashboard health strip displays the audit summary only. It must not alter
 screening scores, candidate order, or operation-advice rules.
 
+The same strip also displays global strategy context for the whole dashboard
+run, not for the currently selected stock:
+
+- `策略口径`: `summary.strategy_title`, currently `潜力股组合评分`.
+- `权重版本`: `summary.weight_version`, derived from market regime.
+- `权重版本` hover title: `summary.weight_version_note`.
+
+Weight-version labels:
+
+- `牛市动量版`: 更重视动量和价格强势。
+- `震荡防御版`: 更重视质量、风控、反转，弱化动量。
+- `熊市防御版`: 质量和风控权重最高，动量不参与总分。
+
 ## When Rules Change
 
 If a calculation, display unit, stage dependency, or stage field contract
@@ -527,6 +580,14 @@ Dashboard pipeline 在 stock-pool 阶段完成后、combo 阶段前运行 `dashb
 - `sample_count`：有效样本数
 - `position_multiplier`：仓位乘数
 - `note`：人类可读的说明
+
+Dashboard summary also exposes the scoring context used by the health strip:
+
+- `strategy_title`: `潜力股组合评分`
+- `strategy_key`: `combo`
+- `combo_strategies`: configured coarse strategy labels
+- `weight_version`: `牛市动量版`, `震荡防御版`, or `熊市防御版`
+- `weight_version_note`: hover explanation for the selected version
 
 ## 2026-07-13: 行业中性化
 

@@ -25,6 +25,9 @@ class DashboardHtmlTest(unittest.TestCase):
                 "as_of_date": "2026-07-10",
                 "universe": "csi300",
                 "universe_index_symbol": "000300",
+                "strategy_title": "潜力股组合评分",
+                "weight_version": "震荡防御版",
+                "weight_version_note": "震荡防御版：更重视质量、风控、反转，弱化动量。由市场状态投票自动切换。",
                 "health": {
                     "health_score": 70,
                     "freshness": {"latest_trade_date": "2026-07-09", "lag_days": 1},
@@ -179,6 +182,9 @@ class DashboardHtmlTest(unittest.TestCase):
                         "planned_entry",
                         "initial_stop",
                         "risk_pct",
+                        "horizon_tags",
+                        "primary_horizon",
+                        "horizon_reason",
                         "take_profit_1r",
                         "take_profit_2r",
                         "plan_note",
@@ -193,6 +199,9 @@ class DashboardHtmlTest(unittest.TestCase):
                             "planned_entry": 4.18,
                             "initial_stop": 3.98,
                             "risk_pct": 0.0478,
+                            "horizon_tags": ["长线", "中线", "短线"],
+                            "primary_horizon": "短线",
+                            "horizon_reason": "基本面质量较强，宏观潜力与技术时机共振，且已有可执行操作计划。",
                             "take_profit_1r": 4.38,
                             "take_profit_2r": 4.58,
                             "plan_note": "规则计划，需用明日实际开盘、成交额和盘中价触发。",
@@ -328,6 +337,11 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("8/20", html)
         self.assertIn("类型过滤", html)
         self.assertIn("科技股 1/2", html)
+        self.assertIn("策略口径", html)
+        self.assertIn("潜力股组合评分", html)
+        self.assertIn("权重版本", html)
+        self.assertIn("震荡防御版", html)
+        self.assertIn("更重视质量、风控、反转，弱化动量", html)
         self.assertIn("潜力看宏观，时机看技术", html)
         self.assertIn("潜力-时机矩阵", html)
         self.assertIn('id="asOfDate"', html)
@@ -427,7 +441,8 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("repeat-hit", html)
         self.assertIn("hit-badge", html)
         self.assertIn("近1月命中", html)
-        self.assertIn("recent-hit-note", html)
+        self.assertNotIn("recent-hit-note", html)
+        self.assertNotIn("属于重复强信号", html)
         self.assertIn("${count}x", html)
         self.assertIn('class="legend" hidden', html)
         self.assertIn("candidateMetricHelp", html)
@@ -524,6 +539,11 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("粗筛分", html)
         self.assertIn("策略命中", html)
         self.assertIn("strategy_summary", html)
+        self.assertIn("适合周期", html)
+        self.assertIn("优先关注", html)
+        self.assertIn("horizonTags", html)
+        self.assertIn("primaryHorizon", html)
+        self.assertIn("horizon_reason", html)
         self.assertIn("strategySummary", html)
         self.assertIn("formatCell", html)
         self.assertIn("formatNumber", html)
@@ -552,7 +572,7 @@ class DashboardHtmlTest(unittest.TestCase):
             html,
         )
         self.assertIn(
-            'const planVisibleColumns = ["code","name","technical_score","action","latest_close","planned_entry","initial_stop","risk_pct","take_profit_1r","take_profit_2r","plan_note"];',
+            'const planVisibleColumns = ["code","name","technical_score","action","horizon_tags","latest_close","planned_entry","initial_stop","risk_pct","take_profit_1r","take_profit_2r","plan_note"];',
             html,
         )
         self.assertNotIn(

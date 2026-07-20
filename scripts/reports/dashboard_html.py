@@ -101,6 +101,10 @@ COLUMN_LABELS = {
     "planned_entry": "计划入场",
     "initial_stop": "初始止损",
     "risk_pct": "价格风险",
+    "horizon_tags": "适合周期",
+    "primary_horizon": "优先关注",
+    "horizon_reason": "周期说明",
+    "horizon_data_note": "周期数据说明",
     "take_profit_1r": "一倍风险目标",
     "take_profit_2r": "两倍风险目标",
     "plan_note": "计划说明",
@@ -176,6 +180,15 @@ def _health_html(summary: dict) -> str:
     market_bull_votes = market.get("bull_votes", 0)
     market_breadth = market.get("breadth_pct")
     market_note = str(market.get("note", ""))
+    strategy_title = summary.get("strategy_title") or "潜力股组合评分"
+    weight_version = summary.get("weight_version") or ""
+    if not weight_version:
+        weight_version = "牛市动量版" if market_regime == "bull" else ("熊市防御版" if market_regime == "bear" else "震荡防御版")
+    weight_version_note = summary.get("weight_version_note") or {
+        "牛市动量版": "牛市动量版：更重视动量和价格强势。由市场状态投票自动切换。",
+        "震荡防御版": "震荡防御版：更重视质量、风控、反转，弱化动量。由市场状态投票自动切换。",
+        "熊市防御版": "熊市防御版：质量和风控权重最高，动量不参与总分。由市场状态投票自动切换。",
+    }.get(str(weight_version), "由市场状态投票自动切换。")
     # 构建三票维度详情
     dim_details = ""
     if market_note:
@@ -215,6 +228,8 @@ def _health_html(summary: dict) -> str:
       <div class="health-metrics">
         <div title="{escape(regime_title)}"><span>市场研判</span><strong>{regime_html}</strong></div>
         <div title="{escape(market_title)}"><span>仓位管理</span><strong>{market_html}</strong></div>
+        <div title="本次宏观粗筛使用的策略包"><span>策略口径</span><strong>{escape(str(strategy_title))}</strong></div>
+        <div title="{escape(str(weight_version_note))}"><span>权重版本</span><strong>{escape(str(weight_version))}</strong></div>
         <div><span>最新行情日</span><strong>{escape(str(latest))}</strong></div>
         <div><span>股票池缺指标</span><strong>{escape(str(sector_missing))}/{escape(str(sector_rows))}</strong></div>
         <div><span>宏观分缺失</span><strong>{escape(str(combo_missing))}/{escape(str(combo_rows))}</strong></div>
@@ -847,12 +862,6 @@ def render_dashboard_html(model: dict) -> str:
     .detail-status {{
       margin-bottom: 8px;
       width: fit-content;
-    }}
-    .recent-hit-note {{
-      margin-top: 6px;
-      color: #8a5a00;
-      font-size: 12px;
-      font-weight: 600;
     }}
     .kpis {{
       display: grid;
@@ -1521,7 +1530,7 @@ def render_dashboard_html(model: dict) -> str:
     const comboVisibleColumns = ["code","name","market_cap","combo_score","growth_score","quality_score","risk_control_score","strategy_summary"];
     const sectorVisibleColumns = ["code","name","stock_type","board_name","market_cap","revenue_yoy","profit_yoy","amount_20d","return_60d","max_drawdown_252d","risk_flags","data_note"];
     const fineVisibleColumns = ["code","name","technical_score","coarse_score","latest_trade_date","close","change_pct","return_20d","amount_ratio","rsi14","max_drawdown_20d","technical_reasons"];
-    const planVisibleColumns = ["code","name","technical_score","action","latest_close","planned_entry","initial_stop","risk_pct","take_profit_1r","take_profit_2r","plan_note"];
+    const planVisibleColumns = ["code","name","technical_score","action","horizon_tags","latest_close","planned_entry","initial_stop","risk_pct","take_profit_1r","take_profit_2r","plan_note"];
     const percentColumns = ["revenue_yoy","profit_yoy","return_60d","max_drawdown_252d"];
     const fineHiddenColumns = ["coarse_strategies"];
     const finePercentColumns = ["change_pct","return_20d","return_60d","max_drawdown_20d"];
@@ -1781,13 +1790,6 @@ def render_dashboard_html(model: dict) -> str:
       return `近1月命中 ${{count}} 次${{dateText}}`;
     }}
 
-    function renderRecentHitNote(item) {{
-      const title = recentHitTitle(item);
-      if (!title) return "";
-      const tone = isRepeatHighGoodHit(item) ? "，属于重复强信号" : "";
-      return `<div class="recent-hit-note">${{escapeHtml(title + tone)}}</div>`;
-    }}
-
     function pointSize(attention_score) {{
       const score = numberValue(attention_score);
       if (score === null) return 28;
@@ -1878,6 +1880,10 @@ def render_dashboard_html(model: dict) -> str:
           attention_score,
           priority,
           action: plan.action || "观察",
+          horizonTags: Array.isArray(plan.horizon_tags) ? plan.horizon_tags : [],
+          primaryHorizon: plan.primary_horizon || "",
+          horizonReason: plan.horizon_reason || "",
+          horizonDataNote: plan.horizon_data_note || "",
           recentHighGoodHits: recentHighGoodHits(plan, fine),
           plan,
           combo,
@@ -1906,6 +1912,9 @@ def render_dashboard_html(model: dict) -> str:
         item.action,
         item.priority?.label,
         item.plan?.primary_strategy,
+        item.horizonTags?.join(" "),
+        item.primaryHorizon,
+        item.horizonReason,
         item.fine?.technical_reasons,
         item.combo?.matched_strategies,
       ].map(text).join(" ").toLowerCase();
@@ -2041,6 +2050,29 @@ def render_dashboard_html(model: dict) -> str:
       return reasonText ? `<div class="technical-reason">${{escapeHtml(reasonText)}}</div>` : "";
     }}
 
+    function horizonText(tags) {{
+      return Array.isArray(tags) && tags.length ? tags.join(" / ") : "证据不足，需人工复核";
+    }}
+
+    function renderHorizonSummary(item) {{
+      const tags = horizonText(item.horizonTags);
+      const primary = item.primaryHorizon || "证据不足";
+      const reason = item.horizonReason || item.horizonDataNote || "需结合基本面、技术时机和操作计划继续人工复核。";
+      return `
+        <div class="action-plan horizon-summary">
+          <div class="action-plan-head">
+            <div>
+              <h3>周期标记</h3>
+              <div class="action-copy">适合周期：${{escapeHtml(tags)}}</div>
+              <div class="action-copy">优先关注：${{escapeHtml(primary)}}</div>
+            </div>
+            <span class="chip">研究注释</span>
+          </div>
+          <div class="risk-note">${{escapeHtml(reason)}}</div>
+        </div>
+      `;
+    }}
+
     function macroCommentary(combo) {{
       const overlap = numberValue(combo.overlap_score);
       const growth = numberValue(combo.growth_score);
@@ -2095,7 +2127,7 @@ def render_dashboard_html(model: dict) -> str:
                 <span class="detail-status chip ${{item.priority.tone}}">${{escapeHtml(item.action)}}</span>
                 <h2>${{escapeHtml(item.name)}} <span class="code">${{escapeHtml(item.code)}}</span></h2>
                 <div class="muted">${{escapeHtml(item.board || "细筛结果股票")}} · ${{escapeHtml(item.stockType || "未分类")}}</div>
-                ${{renderRecentHitNote(item)}}
+                ${{renderHorizonSummary(item)}}
               </div>
               <div class="kpis">
                 <div class="kpi" data-score-help="${{escapeHtml(metricHelp("macroScore"))}}"><strong>${{scoreText(item.macroScore)}}</strong><span>${{helpLabel("宏观潜力", "macroScore")}}</span></div>
@@ -2251,6 +2283,7 @@ def render_dashboard_html(model: dict) -> str:
     function formatCell(stage, col, row) {{
       if (stage.key === "combo" && col === "strategy_summary") return strategySummary(row);
       const value = row[col];
+      if (col === "horizon_tags") return horizonText(value);
       if (col === "market_cap") return formatMarketCap(value);
       if (col === "amount_20d") return formatAmountYi(value);
       if (stage.key === "sector_screen" && percentColumns.includes(col)) return formatPercent(value);
@@ -2265,6 +2298,7 @@ def render_dashboard_html(model: dict) -> str:
     function cellTitle(stage, col, row, display) {{
       if (stage.key === "sector_screen" && col === "stock_type") return text(row.stock_type_note);
       if (stage.key === "combo" && col === "strategy_summary") return text(row.matched_strategies);
+      if (col === "horizon_tags") return text(row.horizon_reason || row.horizon_data_note || display);
       return display;
     }}
 

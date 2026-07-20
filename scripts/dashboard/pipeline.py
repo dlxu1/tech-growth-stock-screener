@@ -46,6 +46,14 @@ MATRIX_SIGNAL_SCOPE_KEYS = [
 ]
 
 
+def _weight_version(regime: str) -> tuple[str, str]:
+    if regime == "bull":
+        return "牛市动量版", "牛市动量版：更重视动量和价格强势。由市场状态投票自动切换。"
+    if regime == "bear":
+        return "熊市防御版", "熊市防御版：质量和风控权重最高，动量不参与总分。由市场状态投票自动切换。"
+    return "震荡防御版", "震荡防御版：更重视质量、风控、反转，弱化动量。由市场状态投票自动切换。"
+
+
 def _recent_hits_cache_path():
     return cache_dir() / "recent_high_good_hits.json"
 
@@ -720,6 +728,12 @@ def run_dashboard(args) -> dict:
     model["summary"]["universe"] = getattr(args, "universe", "") or ""
     model["summary"]["universe_index_symbol"] = getattr(args, "universe_index_symbol", "") or ""
     model["summary"]["sector"] = getattr(args, "sector", "") or ""
+    weight_version, weight_version_note = _weight_version(market_state.regime)
+    model["summary"]["strategy_title"] = combo_meta.get("strategy_title") or "潜力股组合评分"
+    model["summary"]["strategy_key"] = combo_meta.get("strategy") or "potential_combo"
+    model["summary"]["combo_strategies"] = combo_meta.get("combo_strategies") or []
+    model["summary"]["weight_version"] = weight_version
+    model["summary"]["weight_version_note"] = weight_version_note
     model["summary"]["market_state"] = {
         "label": market_state.label,
         "regime": market_state.regime,
