@@ -134,7 +134,9 @@ Use this file as the first stop when a new thread needs to continue work.
     和主题/JSON 文件；`scripts/nas_update_and_mail.sh` 在 NAS 主机上调用
     `mail/msmtp` 发信，成功时发送健康度与最多 10 只 `好时机+高潜力` 股票的
     操作指南，失败时发送 `update.log` 最后 200 行。推荐 cron：
-    `0 17 * * 1-5 MAIL_TO="your_email@example.com" /vol1/docker/tech-growth-stock-screener/scripts/nas_update_and_mail.sh`。
+    `0 17 * * 1-5 MAIL_TO="your_email@example.com,team@example.com" /vol1/docker/tech-growth-stock-screener/scripts/nas_update_and_mail.sh`。
+    `MAIL_TO` 支持逗号、空格或分号分隔多个邮箱；脚本会逐个发送，任一失败会
+    记录日志并返回非零。
   - `好时机+高潜力` 候选股现在带有展示用投资周期字段：
     `horizon_tags`、`primary_horizon`、`horizon_reason` 和
     `horizon_data_note`。UI 文案为 `适合周期` 和 `优先关注`，显示在选中股票

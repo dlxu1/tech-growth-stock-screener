@@ -219,10 +219,15 @@ tail -20 /vol1/docker/tech-growth-stock-screener/nas-cache/cron-test.log
 如果 NAS 主机已经配置好 `mail/msmtp`，推荐让 cron 调用项目自带包装脚本：
 
 ```cron
-0 17 * * 1-5 MAIL_TO="your_email@example.com" /vol1/docker/tech-growth-stock-screener/scripts/nas_update_and_mail.sh
+0 17 * * 1-5 MAIL_TO="your_email@example.com,team@example.com" /vol1/docker/tech-growth-stock-screener/scripts/nas_update_and_mail.sh
 ```
 
-把 `your_email@example.com` 换成实际收件邮箱。这个脚本在 NAS 主机上执行，
+把 `your_email@example.com,team@example.com` 换成实际收件邮箱。`MAIL_TO`
+支持单个邮箱，也支持逗号、空格或分号分隔的多个邮箱；推荐用逗号分隔，
+在 cron 里最不容易被误拆。脚本会逐个收件人发送，任一地址失败时会继续尝试
+其他地址，并在日志中记录失败地址后返回非零状态。
+
+这个脚本在 NAS 主机上执行，
 会调用：
 
 ```bash
@@ -237,13 +242,13 @@ docker compose run --rm update-report
 
 ```bash
 cd /vol1/docker/tech-growth-stock-screener
-MAIL_TO="your_email@example.com" scripts/nas_update_and_mail.sh
+MAIL_TO="your_email@example.com,team@example.com" scripts/nas_update_and_mail.sh
 ```
 
 脚本默认使用 `/usr/bin/docker` 和 `mail`。如果 NAS 上路径不同，可以用环境变量覆盖：
 
 ```bash
-MAIL_TO="your_email@example.com" DOCKER_BIN="/usr/bin/docker" MAIL_BIN="/usr/bin/mail" scripts/nas_update_and_mail.sh
+MAIL_TO="your_email@example.com,team@example.com" DOCKER_BIN="/usr/bin/docker" MAIL_BIN="/usr/bin/mail" scripts/nas_update_and_mail.sh
 ```
 
 ## 常用命令
