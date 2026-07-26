@@ -13,10 +13,22 @@ Use this file as the first stop when a new thread needs to continue work.
 .cache/reports/dashboard_latest.html
 ```
 
+- 新增 dashboardv2 输出路径：
+
+```text
+.cache/reports/dashboard_v2_latest.html
+```
+
 - Current visible dashboard refinements:
   - Dashboard-oriented commands now default to the cached CSI 300 universe. The
     historical date form preserves universe, index symbol, sector, and
     stock-type filters when recalculating.
+  - `dashboardv2` 已作为独立入口加入，v1 `dashboard` 交互保持不变。v2
+    复用现有 dashboard 模型与 SQLite 缓存，将页面组织为
+    `行业主线 -> 主线股票池 -> 龙头收敛 -> 技术确认 -> 每日复盘`。当前第一版
+    用股票池阶段的 `board_name`、样本涨幅、成交额、财报和回撤字段估算行业
+    主线；行业指数历史、资金流和新闻催化缺失时显示保守降级提示，不编造原因。
+    v2 快照通过 `dashboard_variant="v2"` 与 v1 隔离，v1 缺省快照 key 保持兼容。
   - `组合评分` wording has been changed to `宏观粗筛`.
   - `板块筛选` is displayed as `股票池`; the table includes `股票类型`, and hover
     text shows the matched keyword and board-name classification basis.

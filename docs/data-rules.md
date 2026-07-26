@@ -105,6 +105,32 @@ snapshot. Historical snapshots should be treated as research replay artifacts:
 they preserve the model produced under the source data fingerprint available at
 the time, and are not direct trade instructions.
 
+## Dashboardv2 行业主线视图
+
+`dashboardv2` 是独立入口，复用现有 dashboard 串行模型和 SQLite 缓存，但把
+展示链路重排为：
+
+```text
+行业主线 -> 主线股票池 -> 龙头收敛 -> 技术确认 -> 每日复盘
+```
+
+第一阶段实现不改变现有评分公式和阶段成员。行业主线榜优先使用当前 dashboard
+模型中 `股票池` 阶段的 `board_name`、`return_60d`、`amount_20d`、
+`revenue_yoy`、`profit_yoy`、`market_cap` 和 `max_drawdown_252d` 做板块
+样本估算：
+
+- 行业主线强度：缓存样本涨幅排名、上涨家数占比、平均成交额、成长样本和回撤样本的组合。
+- 主线股票池：同一 `board_name` 下的股票，默认最多展示前 12 只。
+- 龙头收敛：在主线股票池内按市值、样本涨幅、成交额、成长和回撤排序。
+- 技术确认：复用现有 `技术分析` 和 `操作建议` 阶段字段，只对主线龙头展示结论、关键价位和风险提醒。
+- 每日复盘：默认取每条主线前 1-3 只龙头作为复盘队列。
+
+若行业指数历史、资金流、新闻或催化摘要尚不可用，`dashboardv2` 必须展示保守
+降级提示，不得编造上涨原因，也不得自动扩展成无约束的全市场推荐。
+
+`dashboardv2` 的快照 key 与 v1 隔离，但 v1 的缺省 snapshot identity 保持兼容：
+只有 `dashboard_variant="v2"` 时才额外加入 variant 维度。
+
 ## Stage Contracts
 
 ### 股票池

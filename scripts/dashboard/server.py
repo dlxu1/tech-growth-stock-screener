@@ -14,6 +14,7 @@ import pandas as pd
 from dashboard.pipeline import run_dashboard
 from dashboard.snapshot import dashboard_data_fingerprint
 from reports.dashboard_html import render_dashboard_html
+from reports.dashboard_v2_html import render_dashboard_v2_html
 
 
 def _clean_for_json(value):
@@ -29,7 +30,7 @@ def _clean_for_json(value):
     return value
 
 
-def _args_for_request(base_args: Namespace, query: dict[str, list[str]]) -> SimpleNamespace:
+def _args_for_request(base_args: Namespace, query: dict[str, list[str]], variant: str = "v1") -> SimpleNamespace:
     data = vars(base_args).copy()
     as_of_values = query.get("as_of_date") or query.get("asOfDate") or [data.get("as_of_date", "")]
     data["as_of_date"] = str(as_of_values[0] or "").strip()
@@ -39,7 +40,8 @@ def _args_for_request(base_args: Namespace, query: dict[str, list[str]]) -> Simp
         values = query.get(key)
         if values:
             data[key] = str(values[0] or "").strip()
-    data["command"] = "dashboard"
+    data["command"] = "dashboardv2" if variant == "v2" else "dashboard"
+    data["dashboard_variant"] = variant
     return SimpleNamespace(**data)
 
 
@@ -64,7 +66,8 @@ def _response_cache_key(path: str, args: SimpleNamespace) -> str:
 
 
 def _build_dashboard_response(server, path: str, query: dict[str, list[str]]) -> tuple[int, str, str]:
-    args = _args_for_request(server.base_args, query)
+    variant = "v2" if path in {"/dashboardv2", "/api/dashboardv2"} else "v1"
+    args = _args_for_request(server.base_args, query, variant=variant)
     cache = getattr(server, "response_cache", None)
     if cache is None:
         cache = {}
@@ -75,8 +78,12 @@ def _build_dashboard_response(server, path: str, query: dict[str, list[str]]) ->
         return cached
 
     model = run_dashboard(args)
-    if path == "/api/dashboard":
+    if path in {"/api/dashboard", "/api/dashboardv2"}:
+        if variant == "v2":
+            model.setdefault("summary", {})["dashboard_variant"] = "v2"
         response = (200, json.dumps(_clean_for_json(model), ensure_ascii=False), "application/json")
+    elif variant == "v2":
+        response = (200, render_dashboard_v2_html(model), "text/html")
     else:
         response = (200, render_dashboard_html(model), "text/html")
     cache[key] = response
@@ -103,7 +110,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
-        if parsed.path not in {"/", "/dashboard", "/api/dashboard"}:
+        if parsed.path not in {"/", "/dashboard", "/dashboardv2", "/api/dashboard", "/api/dashboardv2"}:
             self._send_text(404, "Not found", "text/plain")
             return
         try:
@@ -127,7 +134,7 @@ def serve_dashboard(args: Namespace) -> None:
     host = getattr(args, "host", "127.0.0.1")
     port = int(getattr(args, "port", 5001))
     server = DashboardServer((host, port), DashboardRequestHandler, args)
-    print(f"Dashboard server running at http://{host}:{port}/dashboard", flush=True)
+    print(f"Dashboard server running at http://{host}:{port}/dashboard (v2: http://{host}:{port}/dashboardv2)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

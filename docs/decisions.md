@@ -240,6 +240,24 @@ Use `--no-dashboard-cache` to force no reuse, `--rebuild-dashboard-cache` to
 recalculate and replace a matching snapshot, and `--refresh` or
 `--update-policy refresh` for source-data refresh flows.
 
+## 2026-07-25: Dashboardv2 Is A Parallel Industry-Thesis View
+
+Decision: keep the existing `dashboard` v1 interaction unchanged and add
+`dashboardv2` as a separate entry. v2 reuses the current dashboard data model
+but renders it as `行业主线 -> 主线股票池 -> 龙头收敛 -> 技术确认 -> 每日复盘`.
+The first implementation uses available board-name, quote, turnover, financial
+and plan fields from the existing model to estimate industry mainlines.
+
+Reason: the user needs a less black-box research flow where industry direction
+comes before individual-stock technical timing, while still preserving the
+current CSI 300 dashboard as a familiar research surface.
+
+Implication: do not insert industry-mainline UI into v1 by default. Keep v2
+snapshot identity separate with `dashboard_variant="v2"` while preserving v1
+snapshot-key compatibility. If industry index history,资金流 or news catalysts
+are missing, v2 must show a conservative degradation note instead of inventing
+reasons or broadening back to an unconstrained whole-market recommendation.
+
 ## 2026-07-17: Repeated Strong-Signal Stats Are Cached
 
 Superseded on 2026-07-18 by `近 1 月重复强信号改为矩阵信号物化`. The JSON cache

@@ -36,6 +36,16 @@ class DashboardServerTest(unittest.TestCase):
         self.assertEqual(args.as_of_date, "2026-07-10")
         self.assertEqual(args.backtest_date, "2026-06-30")
 
+    def test_dashboardv2_request_sets_variant(self) -> None:
+        args = _args_for_request(
+            Namespace(command="dashboard-server", universe="csi300", universe_index_symbol="000300", as_of_date="", backtest_date=""),
+            {"as_of_date": ["2026-07-10"]},
+            variant="v2",
+        )
+
+        self.assertEqual(args.command, "dashboardv2")
+        self.assertEqual(args.dashboard_variant, "v2")
+
     def test_dashboard_response_cache_reuses_same_url(self) -> None:
         server = SimpleNamespace(
             base_args=Namespace(
@@ -58,6 +68,31 @@ class DashboardServerTest(unittest.TestCase):
 
         self.assertEqual(first, second)
         dashboard_run.assert_called_once()
+        renderer.assert_called_once()
+
+    def test_dashboardv2_response_uses_v2_renderer(self) -> None:
+        server = SimpleNamespace(
+            base_args=Namespace(
+                command="dashboard-server",
+                universe="csi300",
+                universe_index_symbol="000300",
+                as_of_date="",
+                backtest_date="",
+                source="cache",
+            ),
+            response_cache={},
+        )
+
+        with (
+            patch("dashboard.server.run_dashboard", return_value={"summary": {"as_of_date": "2026-07-16"}, "stages": []}) as dashboard_run,
+            patch("dashboard.server.render_dashboard_v2_html", return_value="<html>v2</html>") as renderer,
+        ):
+            response = _build_dashboard_response(server, "/dashboardv2", {"as_of_date": ["2026-07-16"]})
+
+        self.assertEqual(response, (200, "<html>v2</html>", "text/html"))
+        dashboard_run.assert_called_once()
+        called_args = dashboard_run.call_args.args[0]
+        self.assertEqual(called_args.dashboard_variant, "v2")
         renderer.assert_called_once()
 
 

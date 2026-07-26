@@ -24,6 +24,7 @@ from reports.operation_backtest_markdown import render_operation_backtest
 from reports.repository import load_index_constituents as load_report_index_constituents
 from reports.allocation_markdown import render_allocation_plan
 from reports.dashboard_html import render_dashboard_html
+from reports.dashboard_v2_html import render_dashboard_v2_html
 from reports.sector_screen_markdown import render_sector_screen
 from reports.signal_backtest_markdown import render_signal_backtest
 from reports.signal_validation_markdown import render_signal_validation
@@ -243,7 +244,41 @@ def parse_args() -> argparse.Namespace:
     add_common_screen_args(dashboard)
     add_dashboard_cache_args(dashboard)
     add_recent_high_good_hits_args(dashboard)
-    dashboard.set_defaults(top=5, universe="csi300")
+    dashboard.set_defaults(top=5, universe="csi300", dashboard_variant="v1")
+
+    dashboardv2 = sub.add_parser(
+        "dashboardv2",
+        help="Generate the industry-thesis dashboard v2 HTML report.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "示例:\n"
+            f"  {_command_example('dashboardv2', '--source', 'cache', '--output', str(Path(__file__).resolve().parents[1] / '.cache' / 'reports' / 'dashboard_v2_latest.html'))}"
+        ),
+    )
+    dashboardv2.add_argument("--strategy", choices=["tech_growth"], default="tech_growth")
+    dashboardv2.add_argument("--coarse-strategy", choices=["all", *COARSE_STRATEGIES.keys()], default="all")
+    dashboardv2.add_argument("--coarse-top", type=int, default=5)
+    dashboardv2.add_argument("--combo-strategy-top", type=int, default=20, help="Candidates retained from each combo component strategy before aggregation.")
+    dashboardv2.add_argument("--min-amount", type=float, default=20000000.0, help="Minimum 20-day average turnover for liquidity scoring.")
+    dashboardv2.add_argument("--breakout-buffer", type=float, default=0.003, help="Breakout trigger buffer above recent high.")
+    dashboardv2.add_argument("--volume-multiplier", type=float, default=1.2, help="Turnover multiple required for volume confirmation.")
+    dashboardv2.add_argument("--stop-pct", type=float, default=0.05, help="Fixed stop percentage below planned entry.")
+    dashboardv2.add_argument("--atr-stop-multiplier", type=float, default=1.5, help="ATR multiple for stop placement.")
+    dashboardv2.add_argument("--max-gap-up", type=float, default=0.05, help="Cancel chasing if next open gaps above latest close by this amount.")
+    dashboardv2.add_argument("--move-stop-profit", type=float, default=0.05, help="Profit threshold for moving stop to cost.")
+    dashboardv2.add_argument("--trailing-profit", type=float, default=0.08, help="Profit threshold for enabling trailing stop.")
+    dashboardv2.add_argument("--trailing-drawdown", type=float, default=0.06, help="Drawdown from highest close for trailing stop.")
+    dashboardv2.add_argument("--max-position", type=float, default=0.25, help="Maximum plan-layer single-stock position cap.")
+    dashboardv2.add_argument("--sector-top", type=int, default=100, help="Maximum rows retained in the dashboard sector-screen stage.")
+    dashboardv2.add_argument("--combo-top", type=int, default=100, help="Maximum rows retained in the dashboard macro coarse stage.")
+    dashboardv2.add_argument("--format", choices=["html"], default="html")
+    dashboardv2.add_argument("--output", help="HTML output path. Defaults to .cache/reports/dashboard_v2_latest.html.")
+    add_backtest_args(dashboardv2)
+    add_operation_backtest_args(dashboardv2)
+    add_common_screen_args(dashboardv2)
+    add_dashboard_cache_args(dashboardv2)
+    add_recent_high_good_hits_args(dashboardv2)
+    dashboardv2.set_defaults(top=5, universe="csi300", dashboard_variant="v2")
 
     dashboard_server = sub.add_parser(
         "dashboard-server",
@@ -516,6 +551,13 @@ def main() -> int:
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(render_dashboard_html(model), encoding="utf-8")
             print(json.dumps({"output": str(output.resolve()), "stages": len(model.get("stages", []))}, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "dashboardv2":
+            model = run_dashboard(args)
+            output = Path(args.output) if args.output else cache_dir() / "reports" / "dashboard_v2_latest.html"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(render_dashboard_v2_html(model), encoding="utf-8")
+            print(json.dumps({"output": str(output.resolve()), "stages": len(model.get("stages", [])), "variant": "v2"}, ensure_ascii=False, indent=2))
             return 0
         if args.command == "dashboard-server":
             serve_dashboard(args)

@@ -34,6 +34,36 @@ class DashboardCliTest(unittest.TestCase):
         self.assertNotIn("--core-etf-pct", result.stdout)
         self.assertNotIn("--cash-pct", result.stdout)
 
+    def test_dashboardv2_command_is_registered(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "scripts/run.py", "dashboardv2", "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--output", result.stdout)
+        self.assertIn("--combo-top", result.stdout)
+        self.assertIn("--as-of-date", result.stdout)
+        self.assertIn("--backtest-date", result.stdout)
+        self.assertIn("--stock-type-config", result.stdout)
+        self.assertIn("--stock-types", result.stdout)
+        self.assertNotIn("--capital", result.stdout)
+        self.assertNotIn("--target-return", result.stdout)
+
+    def test_dashboardv2_defaults_to_csi300_and_v2_variant(self) -> None:
+        old_argv = sys.argv[:]
+        try:
+            sys.argv = ["run.py", "dashboardv2"]
+            args = run.parse_args()
+        finally:
+            sys.argv = old_argv
+
+        self.assertEqual(args.universe, "csi300")
+        self.assertEqual(args.dashboard_variant, "v2")
+
     def test_validate_dashboard_command_is_registered(self) -> None:
         result = subprocess.run(
             [sys.executable, "scripts/run.py", "validate-dashboard", "--help"],

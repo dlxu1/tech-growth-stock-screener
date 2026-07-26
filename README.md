@@ -162,6 +162,17 @@ docker compose up -d dashboard
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboard --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_latest.html
 ```
 
+生成行业主线 v2 视图：
+
+```bash
+/Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboardv2 --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_v2_latest.html
+```
+
+`dashboardv2` 保留 v1 数据底座，但把交互重排为
+`行业主线 -> 主线股票池 -> 龙头收敛 -> 技术确认 -> 每日复盘`。当前第一版用缓存
+股票池的板块、样本涨幅、成交额、财报和技术/操作建议字段估算主线；行业指数、
+资金流或新闻催化缺失时会保守提示，不编造上涨原因。
+
 dashboard、dashboard-server 和 validate-dashboard 默认使用沪深 300 缓存成分池。
 这些 dashboard-oriented 命令默认启用完整 dashboard 数据快照缓存：同一组参数且底层源数据指纹未变化时，会直接复用
 `dashboard_snapshots` 中的 `model_json`，避免重复跑完整串行流程。需要强制重算时使用

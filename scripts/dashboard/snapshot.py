@@ -138,6 +138,9 @@ def snapshot_key(args: Any, data_fingerprint: dict | None = None) -> tuple[str, 
         "params": params,
         "data": fingerprint,
     }
+    variant = str(getattr(args, "dashboard_variant", "") or "")
+    if variant and variant != "v1":
+        identity["dashboard_variant"] = variant
     raw = _json_dumps(identity)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest(), params, fingerprint
 
