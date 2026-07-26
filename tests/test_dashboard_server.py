@@ -36,6 +36,15 @@ class DashboardServerTest(unittest.TestCase):
         self.assertEqual(args.as_of_date, "2026-07-10")
         self.assertEqual(args.backtest_date, "2026-06-30")
 
+    def test_request_query_can_override_industry_alias(self) -> None:
+        args = _args_for_request(
+            Namespace(command="dashboard-server", universe="csi300", universe_index_symbol="000300", as_of_date="", backtest_date=""),
+            {"industry": ["半导体"]},
+        )
+
+        self.assertEqual(args.sector, "半导体")
+        self.assertEqual(args.selected_industry, "半导体")
+
     def test_dashboardv2_request_sets_variant(self) -> None:
         args = _args_for_request(
             Namespace(command="dashboard-server", universe="csi300", universe_index_symbol="000300", as_of_date="", backtest_date=""),

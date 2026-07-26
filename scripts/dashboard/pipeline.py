@@ -12,12 +12,14 @@ import pandas as pd
 
 from common import cache_dir, db_path
 from dashboard.health import audit_dashboard_model
+from dashboard.industry_mainline import build_industry_mainlines
 from dashboard.snapshot import dashboard_data_fingerprint, dashboard_snapshot_enabled, load_dashboard_snapshot, save_dashboard_snapshot
 from dashboard.stock_types import annotate_stock_types, filter_by_stock_types, load_stock_type_rules, parse_stock_types
 from dashboard.market_state import compute_dynamic_thresholds, detect
 from dashboard.view_model import build_dashboard_view_model
 from data.db import connect
 from plan.trade_plan import run_trade_plan
+from strategies.coarse import repository as coarse_repository
 from strategies import sector_screen
 from strategies.coarse.registry import run_combo
 from strategies.fine.technical import run as run_fine
@@ -52,6 +54,34 @@ def _weight_version(regime: str) -> tuple[str, str]:
     if regime == "bear":
         return "熊市防御版", "熊市防御版：质量和风控权重最高，动量不参与总分。由市场状态投票自动切换。"
     return "震荡防御版", "震荡防御版：更重视质量、风控、反转，弱化动量。由市场状态投票自动切换。"
+
+
+def _mainline_source_label(universe_source: str | None) -> str:
+    text = str(universe_source or "").strip()
+    if text.startswith("index_constituents:"):
+        return "指数样本代理"
+    if text == "industry-board constituents":
+        return "行业成分股"
+    if text == "financial-report industry":
+        return "财报行业样本"
+    if text:
+        return text
+    return "缓存样本代理"
+
+
+def _select_industry_mainline(mainlines: list[dict], requested_industry: str | None = None) -> tuple[str, dict, str]:
+    if not mainlines:
+        return "", {}, "暂无行业主线数据"
+    requested = str(requested_industry or "").strip()
+    if requested:
+        for item in mainlines:
+            if str(item.get("board_name") or "") == requested:
+                return requested, item, "使用用户指定行业"
+        for item in mainlines:
+            if requested in str(item.get("board_name") or ""):
+                return str(item.get("board_name") or ""), item, "使用用户指定行业的匹配项"
+        return str(mainlines[0].get("board_name") or ""), mainlines[0], "用户指定行业未命中，回退到排名第一"
+    return str(mainlines[0].get("board_name") or ""), mainlines[0], "默认选中排名第一的行业"
 
 
 def _recent_hits_cache_path():
@@ -662,13 +692,40 @@ def run_dashboard(args) -> dict:
         _save_matrix_signal_snapshot(snapshot_args, cached)
         return cached
 
+    requested_industry = str(getattr(args, "sector", "") or getattr(args, "selected_industry", "") or "").strip()
+    mainlines: list[dict] = []
+    selected_industry = requested_industry
+    selected_mainline: dict = {}
+    selected_industry_note = "行业主线预选失败"
+    probe_meta: dict = {}
+    try:
+        probe_args = SimpleNamespace(**vars(args))
+        probe_args.sector = ""
+        probe_args.selected_industry = ""
+        probe_base, probe_meta = coarse_repository.build_base_universe(probe_args)
+        mainlines = build_industry_mainlines(
+            probe_base,
+            pool_source_label=_mainline_source_label(probe_meta.get("universe_source")),
+            pool_source_note=str(probe_meta.get("source_note") or probe_meta.get("selected_industry_fallback_note") or ""),
+        )
+        selected_industry, selected_mainline, selected_industry_note = _select_industry_mainline(mainlines, requested_industry)
+    except Exception:
+        if not selected_industry:
+            selected_industry = ""
+        selected_mainline = {}
+        selected_industry_note = "行业主线暂不可用，已回退到原始股票池"
+    execution_args = SimpleNamespace(**vars(args))
+    execution_args.selected_industry = selected_industry
+    if selected_industry:
+        execution_args.sector = selected_industry
+
     stock_type_rules = load_stock_type_rules(getattr(args, "stock_type_config", None))
     selected_stock_types = parse_stock_types(getattr(args, "stock_types", ""))
-    sector_args = SimpleNamespace(**vars(args))
+    sector_args = SimpleNamespace(**vars(execution_args))
     sector_args.top = getattr(args, "sector_top", 100)
-    combo_args = SimpleNamespace(**vars(args))
+    combo_args = SimpleNamespace(**vars(execution_args))
     combo_args.top = getattr(args, "combo_top", 100)
-    fine_args = SimpleNamespace(**vars(args))
+    fine_args = SimpleNamespace(**vars(execution_args))
 
     sector_result, sector_meta = sector_screen.run(sector_args)
     sector_result = annotate_stock_types(sector_result, stock_type_rules)
@@ -676,25 +733,25 @@ def run_dashboard(args) -> dict:
     # 提前检测市场状态，传入粗筛阶段做动量防御调整
     market_state = detect(
         sector_result["code"].astype(str).str.zfill(6).tolist() if not sector_result.empty else [],
-        as_of_date=getattr(args, "as_of_date", None) or None,
+        as_of_date=getattr(execution_args, "as_of_date", None) or None,
     )
     combo, combo_meta = run_combo(combo_args, candidates=combo_candidates, market_state=market_state.regime)
-    fine_args.top = len(combo) if not combo.empty else getattr(args, "top", 20)
+    fine_args.top = len(combo) if not combo.empty else getattr(execution_args, "top", 20)
     fine, fine_meta = run_fine(fine_args, candidates=combo)
     if not combo.empty and not fine.empty and "combo_score" in combo.columns and "combo_score" not in fine.columns:
         combo_scores = combo[["code", "combo_score"]].copy()
         fine = fine.merge(combo_scores, on="code", how="left")
     # 防御模式下仓位上限打折
     if market_state.regime != "bull":
-        original_max = getattr(args, "max_position", 0.25) or 0.25
-        setattr(args, "max_position", round(original_max * market_state.position_multiplier, 4))
+        original_max = getattr(execution_args, "max_position", 0.25) or 0.25
+        setattr(execution_args, "max_position", round(original_max * market_state.position_multiplier, 4))
     # 动态阈值：根据当前候选股分数分布自适应象限线
     adaptive_thresholds = compute_dynamic_thresholds(
         combo_scores=pd.to_numeric(fine.get("combo_score", pd.Series(dtype=float)), errors="coerce").dropna().tolist() if not fine.empty else [],
         technical_scores=pd.to_numeric(fine.get("technical_score", pd.Series(dtype=float)), errors="coerce").dropna().tolist() if not fine.empty else [],
     )
     plan_candidates = _attention_ranked_candidates(fine)
-    plan, plan_meta = run_trade_plan(args, candidates=plan_candidates)
+    plan, plan_meta = run_trade_plan(execution_args, candidates=plan_candidates)
     if not plan.empty and not plan_candidates.empty:
         enrich_cols = [col for col in ["code", "attention_score", "coarse_score"] if col in plan_candidates.columns]
         if len(enrich_cols) > 1:
@@ -717,6 +774,21 @@ def run_dashboard(args) -> dict:
         "plan": plan_meta,
     }
     model = build_dashboard_view_model(stages, metas, stock_type_rules=stock_type_rules)
+    model["summary"]["industry_mainlines"] = mainlines
+    model["summary"]["selected_industry"] = selected_industry
+    model["summary"]["selected_industry_rank"] = selected_mainline.get("rank")
+    model["summary"]["selected_industry_reason"] = selected_mainline.get("mainline_reason") or selected_industry_note
+    model["summary"]["selected_industry_note"] = selected_industry_note
+    model["summary"]["industry_mainline_source"] = probe_meta.get("universe_source") or ""
+    model["summary"]["industry_mainline_source_label"] = _mainline_source_label(probe_meta.get("universe_source"))
+    model["summary"]["industry_pool"] = {
+        "count": len(sector_result),
+        "source_label": sector_meta.get("selected_industry_pool_label")
+        or ("行业全成分股" if sector_meta.get("selected_industry_pool_kind") == "full" else "缓存样本代理"),
+        "source_kind": sector_meta.get("selected_industry_pool_kind") or "sample",
+        "source": sector_meta.get("selected_industry_pool_source") or sector_meta.get("universe_source") or "",
+        "note": sector_meta.get("selected_industry_fallback_note") or sector_meta.get("selected_industry_pool_note") or "",
+    }
     model["summary"]["stock_type_filter"] = {
         "selected_types": selected_stock_types,
         "before_count": len(sector_result),
@@ -727,7 +799,7 @@ def run_dashboard(args) -> dict:
     model["summary"]["backtest_date"] = getattr(args, "backtest_date", "") or getattr(args, "as_of_date", "") or ""
     model["summary"]["universe"] = getattr(args, "universe", "") or ""
     model["summary"]["universe_index_symbol"] = getattr(args, "universe_index_symbol", "") or ""
-    model["summary"]["sector"] = getattr(args, "sector", "") or ""
+    model["summary"]["sector"] = getattr(execution_args, "sector", "") or ""
     weight_version, weight_version_note = _weight_version(market_state.regime)
     model["summary"]["strategy_title"] = combo_meta.get("strategy_title") or "潜力股组合评分"
     model["summary"]["strategy_key"] = combo_meta.get("strategy") or "potential_combo"
@@ -746,20 +818,20 @@ def run_dashboard(args) -> dict:
         "note": market_state.note,
     }
     model["summary"]["adaptive_thresholds"] = adaptive_thresholds
-    setattr(args, "macro_potential_threshold", adaptive_thresholds.get("macro_potential_threshold"))
-    setattr(args, "technical_timing_threshold", adaptive_thresholds.get("technical_timing_threshold"))
+    setattr(execution_args, "macro_potential_threshold", adaptive_thresholds.get("macro_potential_threshold"))
+    setattr(execution_args, "technical_timing_threshold", adaptive_thresholds.get("technical_timing_threshold"))
     _save_matrix_signal_snapshot(snapshot_args, model)
-    if _recent_high_good_hits_enabled(args):
-        recent_hits = _collect_recent_high_good_hits(model, args)
-        _annotate_recent_high_good_hits(model, recent_hits, args)
+    if _recent_high_good_hits_enabled(execution_args):
+        recent_hits = _collect_recent_high_good_hits(model, execution_args)
+        _annotate_recent_high_good_hits(model, recent_hits, execution_args)
     model["summary"]["health"] = audit_dashboard_model(model)
-    backtest = _build_backtest_model(model, args)
+    backtest = _build_backtest_model(model, execution_args)
     if backtest is not None:
         model["backtest"] = backtest
-    signal_validation = _build_signal_validation_model(model, args)
+    signal_validation = _build_signal_validation_model(model, execution_args)
     if signal_validation is not None:
         model["signal_validation"] = signal_validation
-    operation_backtest = _build_operation_backtest_model(model, args)
+    operation_backtest = _build_operation_backtest_model(model, execution_args)
     if operation_backtest is not None:
         model["operation_backtest"] = operation_backtest
     save_dashboard_snapshot(snapshot_args, model)

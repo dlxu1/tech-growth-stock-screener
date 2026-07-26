@@ -17,6 +17,8 @@ from typing import Any
 
 import pandas as pd
 
+from dashboard.industry_mainline import build_industry_mainlines
+
 
 def _num(value: Any, digits: int = 2) -> str:
     try:
@@ -130,98 +132,16 @@ def _leader_score_frame(group: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_mainline_objects(model: dict) -> list[dict]:
+    summary = model.get("summary") or {}
     sector_rows = _stage_rows(model, "sector_screen")
     fine_rows = _stage_rows(model, "fine")
     plan_rows = _stage_rows(model, "plan")
     sector_df = _rows_to_df(sector_rows)
     if sector_df.empty:
         return []
-    sector_df = _numeric_group(
-        sector_df,
-        ["market_cap", "revenue_yoy", "profit_yoy", "amount_20d", "return_60d", "max_drawdown_252d"],
-    )
-    sector_df["board_name"] = sector_df.get("board_name", pd.Series(dtype=str)).fillna("未分类").astype(str)
-    sector_df = sector_df[sector_df["board_name"].astype(str).str.strip() != ""].copy()
-    if sector_df.empty:
-        return []
-
-    fine_map = {str(row.get("code") or "").zfill(6): row for row in fine_rows}
-    plan_map = {str(row.get("code") or "").zfill(6): row for row in plan_rows}
-
-    groups: list[dict] = []
-    for board_name, group in sector_df.groupby("board_name", dropna=False):
-        group = group.copy()
-        if group.empty:
-            continue
-        group = _leader_score_frame(group)
-        if "leader_score" not in group.columns:
-            group["leader_score"] = 0.5
-        group = group.sort_values(["leader_score", "market_cap"], ascending=[False, False])
-        stock_count = int(len(group))
-        avg_return_60d = group["return_60d"].mean()
-        avg_amount_20d = group["amount_20d"].mean()
-        avg_revenue_yoy = group["revenue_yoy"].mean()
-        avg_profit_yoy = group["profit_yoy"].mean()
-        avg_max_drawdown_252d = group["max_drawdown_252d"].mean()
-        positive_ratio = float((group["return_60d"].fillna(0) > 0).mean()) if stock_count else 0.0
-        growth_signal = ((group["revenue_yoy"].clip(lower=0).fillna(0) + group["profit_yoy"].clip(lower=0).fillna(0)) / 2).mean()
-        pool = []
-        for row in group.head(12).to_dict(orient="records"):
-            merged = _merge_row_context(row, fine_map, plan_map)
-            merged["leader_reason"] = _leader_reason(merged)
-            pool.append(merged)
-        leaders = pool[:3]
-        groups.append(
-            {
-                "board_name": str(board_name),
-                "stock_count": stock_count,
-                "avg_return_60d": avg_return_60d,
-                "avg_amount_20d": avg_amount_20d,
-                "avg_revenue_yoy": avg_revenue_yoy,
-                "avg_profit_yoy": avg_profit_yoy,
-                "avg_max_drawdown_252d": avg_max_drawdown_252d,
-                "positive_ratio": positive_ratio,
-                "mainline_score": 0.0,
-                "_growth_signal": growth_signal,
-                "_risk_signal": -(abs(avg_max_drawdown_252d) if pd.notna(avg_max_drawdown_252d) else 0.0),
-                "mainline_reason": _mainline_reason(
-                    pd.Series(
-                        {
-                            "avg_return_60d": avg_return_60d,
-                            "positive_ratio": positive_ratio,
-                            "avg_amount_20d": avg_amount_20d,
-                            "avg_revenue_yoy": avg_revenue_yoy,
-                            "avg_profit_yoy": avg_profit_yoy,
-                        }
-                    )
-                ),
-                "stock_pool": pool,
-                "leaders": leaders,
-                "daily_review": leaders,
-            }
-        )
-
-    if groups:
-        score_frame = pd.DataFrame(groups)
-        return_rank = pd.to_numeric(score_frame["avg_return_60d"], errors="coerce").rank(pct=True, ascending=True).fillna(0.5)
-        amount_rank = pd.to_numeric(score_frame["avg_amount_20d"], errors="coerce").rank(pct=True, ascending=True).fillna(0.5)
-        growth_rank = pd.to_numeric(score_frame["_growth_signal"], errors="coerce").rank(pct=True, ascending=True).fillna(0.5)
-        risk_rank = pd.to_numeric(score_frame["_risk_signal"], errors="coerce").rank(pct=True, ascending=True).fillna(0.5)
-        for idx, group in enumerate(groups):
-            group["mainline_score"] = float(
-                return_rank.iloc[idx] * 0.35
-                + float(group.get("positive_ratio") or 0.0) * 0.20
-                + amount_rank.iloc[idx] * 0.15
-                + growth_rank.iloc[idx] * 0.20
-                + risk_rank.iloc[idx] * 0.10
-            )
-            group.pop("_growth_signal", None)
-            group.pop("_risk_signal", None)
-
-    groups.sort(key=lambda item: (float(item.get("mainline_score") or 0), float(item.get("avg_return_60d") or 0)), reverse=True)
-    for index, group in enumerate(groups, start=1):
-        group["rank"] = index
-    return groups
+    pool_source_label = str((summary.get("industry_pool") or {}).get("source_label") or summary.get("industry_mainline_source_label") or "缓存样本代理")
+    pool_source_note = str((summary.get("industry_pool") or {}).get("note") or summary.get("selected_industry_note") or "")
+    return build_industry_mainlines(sector_df, fine_rows, plan_rows, pool_source_label=pool_source_label, pool_source_note=pool_source_note)
 
 
 def _build_context(model: dict) -> dict[str, Any]:
@@ -276,7 +196,7 @@ def render_dashboard_v2_html(model: dict) -> str:
               </div>
               <div class="industry-meta">
                 {escape(str(item.get('stock_count') or 0))} 只 · 成交额 {_yi(item.get('avg_amount_20d'))} ·
-                上涨家数占比 {_pct(item.get('positive_ratio'))}
+                上涨家数占比 {_pct(item.get('positive_ratio'))} · {escape(str(item.get('pool_source_label') or '样本代理'))}
               </div>
               <div class="industry-reason">{escape(str(item.get('mainline_reason') or ''))}</div>
             </button>
@@ -382,16 +302,17 @@ def render_dashboard_v2_html(model: dict) -> str:
   <div class="shell">
     <main>
       <div class="top">
-        <div>
-          <h1>把沪深300当基准池，把行业主线当方向盘</h1>
-          <p class="sub">v2 只强调少数主线和少数龙头。行业排序先复用当前缓存可得的板块样本，技术面只做最后确认。</p>
-        </div>
-        <div class="chips">
-          <div class="chip green">数据健康 {escape(str(health_score))}/100</div>
-          <div class="chip blue">{escape(str(strategy_title))}</div>
-          <div class="chip amber">{escape(str(weight_version))}</div>
-          <div class="chip">最新行情日 {escape(str(latest_trade_date))}</div>
-        </div>
+          <div>
+            <h1>把沪深300当基准池，把行业主线当方向盘</h1>
+            <p class="sub">v2 只强调少数主线和少数龙头。行业排序复用当前缓存可得的板块样本，技术面只做最后确认。</p>
+          </div>
+          <div class="chips">
+            <div class="chip green">数据健康 {escape(str(health_score))}/100</div>
+            <div class="chip blue">{escape(str(strategy_title))}</div>
+            <div class="chip amber">{escape(str(weight_version))}</div>
+            <div class="chip">最新行情日 {escape(str(latest_trade_date))}</div>
+            <div class="chip">暂停更新</div>
+          </div>
       </div>
 
       <div class="pipeline">

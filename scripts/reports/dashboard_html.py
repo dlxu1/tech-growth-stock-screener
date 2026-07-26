@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from html import escape
+from urllib.parse import urlencode
 
 
 def _json_script(model: dict) -> str:
@@ -396,6 +397,148 @@ def _signal_validation_html(signal_validation: dict | None, page_summary: dict |
     """
 
 
+def _industry_mainline_html(
+    summary: dict,
+    as_of_date: str,
+    backtest_date: str,
+    universe: str,
+    universe_index_symbol: str,
+    stock_types: str,
+) -> str:
+    mainlines = summary.get("industry_mainlines") or []
+    if not mainlines:
+        return """
+        <section class="industry-mainline-band">
+          <div class="section-title">
+            <h2>行业主线证据板</h2>
+            <span class="chip">暂无行业主线数据</span>
+          </div>
+          <div class="muted">当前没有可用行业主线，下面的高潜力和好时机仍按原始数据口径展示。</div>
+        </section>
+        """
+
+    selected_name = str(summary.get("selected_industry") or mainlines[0].get("board_name") or "")
+    selected = next((item for item in mainlines if str(item.get("board_name") or "") == selected_name), mainlines[0])
+    selected_rank = int(summary.get("selected_industry_rank") or selected.get("rank") or 1)
+    pool = summary.get("industry_pool") or {}
+    pool_count = int(pool.get("count") or selected.get("stock_count") or 0)
+    pool_label = str(pool.get("source_label") or selected.get("pool_source_label") or "样本代理")
+    pool_kind = str(pool.get("source_kind") or "sample")
+    pool_kind_label = "行业全成分股" if pool_kind == "full" else "缓存样本代理"
+    pool_source = str(pool.get("source") or selected.get("pool_source_note") or "")
+    pool_note = str(pool.get("note") or selected.get("pool_source_note") or "")
+    source_label = str(summary.get("industry_mainline_source_label") or selected.get("pool_source_label") or "缓存样本代理")
+    source_note = str(summary.get("selected_industry_note") or summary.get("selected_industry_reason") or "")
+
+    def _nav_href(board_name: str) -> str:
+        query = urlencode(
+            {
+                "as_of_date": as_of_date,
+                "backtest_date": backtest_date,
+                "universe": universe,
+                "universe_index_symbol": universe_index_symbol,
+                "stock_types": stock_types,
+                "sector": board_name,
+            }
+        )
+        return f"/dashboard?{query}"
+
+    cards = []
+    for item in mainlines[:8]:
+        board_name = str(item.get("board_name") or "未分类")
+        active = " active" if board_name == selected_name else ""
+        cards.append(
+            f"""
+            <a class="industry-card{active}" href="{escape(_nav_href(board_name))}">
+              <div class="industry-card-head">
+                <strong>#{escape(str(item.get('rank') or 0))} {escape(board_name)}</strong>
+                <span>{_number(item.get('mainline_score'), 2)}</span>
+              </div>
+              <div class="industry-card-meta">
+                {escape(str(item.get('stock_count') or 0))} 只 · 近60日 {_percent(item.get('avg_return_60d'))} ·
+                上涨家数 {_percent(item.get('positive_ratio'))}
+              </div>
+              <div class="industry-card-meta muted">
+                成交额 {_money(item.get('avg_amount_20d'))} · 回撤 {_percent(item.get('avg_max_drawdown_252d'))}
+              </div>
+            </a>
+            """
+        )
+    cards_html = "\n".join(cards)
+
+    leaders = selected.get("leaders") or selected.get("stock_pool") or []
+    leader_html = []
+    for row in leaders[:5]:
+        leader_html.append(
+            f"""
+            <div class="industry-stock-item">
+              <div>
+                <strong>{escape(str(row.get('name') or row.get('board_stock_name') or 'N/A'))}</strong>
+                <span>{escape(str(row.get('leader_reason') or row.get('match_reason') or ''))}</span>
+              </div>
+              <span class="chip">{escape(str(row.get('code') or ''))}</span>
+            </div>
+            """
+        )
+    leader_html = "\n".join(leader_html) or '<div class="empty">暂无主线股票池。</div>'
+
+    evidence_html = f"""
+      <div class="industry-stat-grid">
+        <div class="industry-stat"><strong>{_number(selected.get('mainline_score'), 2)}</strong><span>主线强度</span></div>
+        <div class="industry-stat"><strong>{_percent(selected.get('avg_return_60d'))}</strong><span>近60日涨幅</span></div>
+        <div class="industry-stat"><strong>{_percent(selected.get('positive_ratio'))}</strong><span>上涨家数占比</span></div>
+        <div class="industry-stat"><strong>{_money(selected.get('avg_amount_20d'))}</strong><span>平均成交额</span></div>
+        <div class="industry-stat"><strong>{_percent(selected.get('avg_revenue_yoy'))}</strong><span>营收均值</span></div>
+        <div class="industry-stat"><strong>{_percent(selected.get('avg_profit_yoy'))}</strong><span>净利均值</span></div>
+      </div>
+      <div class="industry-reason">{escape(str(selected.get('mainline_reason') or ''))}</div>
+    """
+
+    return f"""
+    <section class="industry-mainline-band">
+      <div class="section-title">
+        <h2>行业主线证据板</h2>
+        <div class="industry-badges">
+          <span class="chip green">当前选中 {escape(selected_name)}</span>
+          <span class="chip">排名 #{escape(str(selected_rank))}</span>
+          <span class="chip">{escape(source_label)}</span>
+          <span class="chip">{escape(pool_label)} {escape(str(pool_count))} 只</span>
+        </div>
+      </div>
+      <div class="muted">点击行业后服务端重算，下面的高潜力与好时机模块会跟着切到该行业股票池。{escape(source_note)}</div>
+      <div class="industry-mainline-grid">
+        <div class="industry-list">
+          {cards_html}
+        </div>
+        <div class="industry-focus">
+          <div class="industry-focus-head">
+            <div>
+              <strong>{escape(selected_name)}</strong>
+              <span>证据排序 / 主线强度排序</span>
+            </div>
+            <div class="industry-focus-meta">
+              <span class="chip">{escape(pool_label)}</span>
+              <span class="chip">{escape(pool_kind_label)}</span>
+              <span class="chip">{escape(pool_source or 'N/A')}</span>
+            </div>
+          </div>
+          {evidence_html}
+          <div class="industry-note">{escape(pool_note or '页面会优先用行业全成分股；若不可用则透明降级为样本代理。')}</div>
+        </div>
+        <div class="industry-pool">
+          <div class="industry-pool-head">
+            <strong>主线股票池</strong>
+            <span class="muted">{escape(str(pool_count))} 只 · 只跟踪这一条主线</span>
+          </div>
+          <div class="industry-stock-list">
+            {leader_html}
+          </div>
+        </div>
+      </div>
+    </section>
+    """
+
+
 def render_dashboard_html(model: dict) -> str:
     """Render a self-contained dashboard document."""
 
@@ -408,16 +551,17 @@ def render_dashboard_html(model: dict) -> str:
     column_labels_json = _json_script(COLUMN_LABELS)
     score_help_json = _json_script(SCORE_HELP)
     summary = model.get("summary") or {}
-    health_html = _health_html(summary)
-    backtest_html = _backtest_html(model.get("backtest"), summary)
-    operation_backtest_html = _operation_backtest_html(model.get("operation_backtest"))
-    signal_validation_html = _signal_validation_html(model.get("signal_validation"), summary)
     as_of_date = str(summary.get("as_of_date") or "")
     backtest_date = str(summary.get("backtest_date") or "")
     universe = str(summary.get("universe") or "")
     universe_index_symbol = str(summary.get("universe_index_symbol") or "")
     sector = str(summary.get("sector") or "")
     stock_types = ",".join((summary.get("stock_type_filter") or {}).get("selected_types") or [])
+    health_html = _health_html(summary)
+    industry_mainline_html = _industry_mainline_html(summary, as_of_date, backtest_date, universe, universe_index_symbol, stock_types)
+    backtest_html = _backtest_html(model.get("backtest"), summary)
+    operation_backtest_html = _operation_backtest_html(model.get("operation_backtest"))
+    signal_validation_html = _signal_validation_html(model.get("signal_validation"), summary)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -589,6 +733,165 @@ def render_dashboard_html(model: dict) -> str:
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }}
+    .industry-mainline-band {{
+      padding: 12px;
+      margin-bottom: 12px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }}
+    .industry-badges {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }}
+    .industry-mainline-grid {{
+      display: grid;
+      grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr) minmax(240px, 0.8fr);
+      gap: 12px;
+      margin-top: 10px;
+      align-items: start;
+    }}
+    .industry-list {{
+      display: grid;
+      gap: 8px;
+      max-height: 420px;
+      overflow: auto;
+      padding-right: 4px;
+    }}
+    .industry-card {{
+      display: grid;
+      gap: 4px;
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfb;
+      color: inherit;
+      cursor: pointer;
+    }}
+    .industry-card.active {{
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }}
+    .industry-card-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+    }}
+    .industry-card-head strong {{
+      font-size: 14px;
+    }}
+    .industry-card-head span {{
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--warn);
+    }}
+    .industry-card-meta {{
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.45;
+    }}
+    .industry-focus,
+    .industry-pool {{
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfb;
+    }}
+    .industry-focus-head,
+    .industry-pool-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }}
+    .industry-focus-head strong,
+    .industry-pool-head strong {{
+      display: block;
+      font-size: 16px;
+    }}
+    .industry-focus-head span {{
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }}
+    .industry-focus-meta {{
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }}
+    .industry-stat-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }}
+    .industry-stat {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--panel);
+      min-width: 0;
+    }}
+    .industry-stat strong {{
+      display: block;
+      font-size: 16px;
+      line-height: 1.15;
+    }}
+    .industry-stat span {{
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 2px;
+    }}
+    .industry-reason {{
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.55;
+    }}
+    .industry-note {{
+      margin-top: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }}
+    .industry-stock-list {{
+      display: grid;
+      gap: 8px;
+    }}
+    .industry-stock-item {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--panel);
+    }}
+    .industry-stock-item strong {{
+      display: block;
+      font-size: 13px;
+      line-height: 1.3;
+    }}
+    .industry-stock-item span {{
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      margin-top: 2px;
     }}
     .decision-shell {{
       display: grid;
@@ -1430,6 +1733,8 @@ def render_dashboard_html(model: dict) -> str:
       .stage-funnel,
       .health-strip,
       .health-metrics,
+      .industry-mainline-grid,
+      .industry-stat-grid,
       .decision-shell,
       .matrix-focus-shell,
       .detail-layout,
@@ -1442,6 +1747,13 @@ def render_dashboard_html(model: dict) -> str:
       .validation-grid,
       .validation-heatmap,
       .legend {{ grid-template-columns: 1fr; }}
+      .industry-badges,
+      .industry-focus-meta,
+      .industry-focus-head,
+      .industry-pool-head,
+      .industry-stock-item {{
+        justify-content: flex-start;
+      }}
       .backtest-summary {{ text-align: left; }}
       .stage-grid {{ grid-template-columns: 1fr; }}
       .toolbar {{ align-items: stretch; }}
@@ -1468,6 +1780,7 @@ def render_dashboard_html(model: dict) -> str:
     </header>
     <div class="stage-funnel" id="stageFunnel"></div>
     {health_html}
+    {industry_mainline_html}
     <div class="decision-shell matrix-focus-shell">
       <section class="decision-panel matrix-panel">
         <div class="section-title">

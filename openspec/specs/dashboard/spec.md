@@ -6,6 +6,33 @@
 
 ## Requirements
 
+### Requirement: dashboard v1 展示行业主线证据板
+系统 SHALL 在 `dashboard` v1 的数据健康条下方、矩阵/决策区上方展示行业主线证据板，并将其作为后续分析的方向确认层。
+
+#### Scenario: 默认行业选择
+- **WHEN** 用户打开 `dashboard` 且未显式指定行业
+- **THEN** 系统 SHALL 先计算行业主线榜
+- **AND** 系统 SHALL 默认选中排名第一且有可用股票池的行业
+
+#### Scenario: 行业股票池驱动下游阶段
+- **WHEN** 系统已确定当前选中行业
+- **THEN** `股票池` SHALL 输出该行业的股票池
+- **AND** `宏观粗筛`、`技术分析`、`操作建议` SHALL 只消费该行业股票池的下游结果
+
+#### Scenario: 股票池来源透明展示
+- **WHEN** dashboard 展示行业主线证据板
+- **THEN** 系统 SHALL 显示当前股票池来源、池内数量和降级状态
+- **AND** 若行业全成分股可用，系统 SHALL 标注为行业全成分股
+- **AND** 若只能使用缓存样本或指数内样本，系统 SHALL 明确标注样本代理口径
+
+### Requirement: dashboardv2 暂停更新
+系统 SHALL 保留 `dashboardv2` 兼容入口，但不再把新的交互需求投放到该页面。
+
+#### Scenario: 访问旧入口
+- **WHEN** 用户访问 `dashboardv2`
+- **THEN** 系统 MAY 保留兼容响应以避免历史链接失效
+- **AND** 系统 SHOULD 标注 `dashboardv2` 已暂停更新，主入口回到 `dashboard`
+
 ### Requirement: 高潜力好时机股票周期标记
 系统 SHALL 为 dashboard 操作建议行生成展示用投资周期字段：`horizon_tags`、`primary_horizon`、`horizon_reason` 和 `horizon_data_note`，并在交互界面中以 `适合周期` 和 `优先关注` 展示。
 

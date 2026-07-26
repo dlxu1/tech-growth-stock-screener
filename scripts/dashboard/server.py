@@ -40,6 +40,10 @@ def _args_for_request(base_args: Namespace, query: dict[str, list[str]], variant
         values = query.get(key)
         if values:
             data[key] = str(values[0] or "").strip()
+    industry_values = query.get("industry") or query.get("selected_industry") or []
+    if industry_values:
+        data["sector"] = str(industry_values[0] or "").strip()
+        data["selected_industry"] = str(industry_values[0] or "").strip()
     data["command"] = "dashboardv2" if variant == "v2" else "dashboard"
     data["dashboard_variant"] = variant
     return SimpleNamespace(**data)

@@ -258,6 +258,23 @@ snapshot-key compatibility. If industry index history,资金流 or news catalyst
 are missing, v2 must show a conservative degradation note instead of inventing
 reasons or broadening back to an unconstrained whole-market recommendation.
 
+## 2026-07-26: Industry Mainline Moves Into Dashboard V1
+
+Decision: merge the industry-mainline evidence board into `dashboard` v1 and
+pause new functional work on `dashboardv2`. v1 now shows
+`数据健康 -> 行业主线证据板 -> 宏观潜力 × 技术时机 / 高潜力+好时机`, and the
+selected industry becomes the upstream stock pool when full constituents are
+available.
+
+Reason: the industry-first flow is more explainable for the user, while v1 is
+the stable entry point that already carries the matrix, backtest, validation and
+operation advice UI. Keeping v2 as a separate evolving product duplicated the
+same data work and made the main dashboard harder to trust.
+
+Implication: new industry-thesis or mainline-driven changes should target v1.
+`dashboardv2` remains only as a compatibility/deprecated surface, and its
+snapshot identity stays isolated for historical reuse.
+
 ## 2026-07-17: Repeated Strong-Signal Stats Are Cached
 
 Superseded on 2026-07-18 by `近 1 月重复强信号改为矩阵信号物化`. The JSON cache

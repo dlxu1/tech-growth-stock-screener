@@ -27,6 +27,34 @@ from data.db import connect
 
 
 class DashboardPipelineTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._probe_base = pd.DataFrame([{"code": "000001", "name": "样本", "board_name": "半导体", "market_cap": 1}])
+        self._probe_mainlines = [
+            {
+                "board_name": "半导体",
+                "rank": 1,
+                "mainline_score": 0.91,
+                "stock_count": 1,
+                "avg_return_60d": 0.48,
+                "avg_amount_20d": 100000000.0,
+                "avg_revenue_yoy": 0.12,
+                "avg_profit_yoy": 0.08,
+                "avg_max_drawdown_252d": -0.18,
+                "positive_ratio": 1.0,
+                "mainline_reason": "近60日涨幅 48.00%；上涨家数占比 100.00%；成交额 1.0 亿",
+                "pool_source_label": "指数样本代理",
+                "pool_source_note": "测试样本",
+                "leaders": [{"code": "000001", "name": "样本", "leader_reason": "市值靠前"}],
+                "stock_pool": [{"code": "000001", "name": "样本", "leader_reason": "市值靠前"}],
+            }
+        ]
+        self._probe_base_patcher = patch("dashboard.pipeline.coarse_repository.build_base_universe", return_value=(self._probe_base, {"universe_source": "index_constituents:000300"}))
+        self._probe_mainline_patcher = patch("dashboard.pipeline.build_industry_mainlines", return_value=self._probe_mainlines)
+        self._probe_base_patcher.start()
+        self._probe_mainline_patcher.start()
+        self.addCleanup(self._probe_base_patcher.stop)
+        self.addCleanup(self._probe_mainline_patcher.stop)
+
     def test_recent_high_good_hits_are_disabled_by_default(self) -> None:
         args = Namespace(
             strategy="tech_growth",
@@ -312,6 +340,7 @@ class DashboardPipelineTest(unittest.TestCase):
 
         self.assertEqual(sector_run.call_args.args[0].top, 100)
         self.assertEqual(sector_run.call_args.args[0].sector, "半导体")
+        self.assertEqual(sector_run.call_args.args[0].selected_industry, "半导体")
         self.assertEqual(combo_run.call_args.args[0].top, 100)
         self.assertEqual(fine_run.call_args.args[0].top, 100)
         combo_candidates = combo_run.call_args.kwargs["candidates"]
@@ -326,6 +355,8 @@ class DashboardPipelineTest(unittest.TestCase):
         self.assertEqual(model["summary"]["stage_counts"]["combo"], 100)
         self.assertEqual(model["summary"]["stage_counts"]["fine"], 100)
         self.assertEqual(model["summary"]["stage_counts"]["plan"], 100)
+        self.assertEqual(model["summary"]["selected_industry"], "半导体")
+        self.assertEqual(model["summary"]["industry_pool"]["count"], 1)
         self.assertIn("health", model["summary"])
         self.assertIn("health_score", model["summary"]["health"])
         self.assertEqual(model["stages"][-1]["rows"][0]["action"], "等待回踩买入")

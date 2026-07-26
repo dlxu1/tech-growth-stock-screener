@@ -14,7 +14,7 @@
 
 当前 dashboard 默认数据规模：
 
-- `股票池`：最多 100 只，按基础股票池和行业/板块条件形成研究 universe。
+- `股票池`：默认最多 100 只；当 dashboard 选中行业主线时，会优先使用该行业全成分股作为研究 universe，并在降级时标注样本代理口径。
 - `宏观粗筛`：最多 100 只，从股票池中按基本面、成长、质量、风控、流动性和动量综合排序。
 - `技术分析`：覆盖全部宏观粗筛股票，计算趋势、动量、量能、突破、风险和流动性指标。
 - `操作建议`：覆盖全部技术分析股票，生成下一交易日规则化计划；不包含个人预算、仓位预算或资金配置字段。
@@ -168,10 +168,8 @@ docker compose up -d dashboard
 /Users/xudoulei/work/tech-growth-stock-screener/.venv/bin/python /Users/xudoulei/work/tech-growth-stock-screener/scripts/run.py dashboardv2 --source cache --output /Users/xudoulei/work/tech-growth-stock-screener/.cache/reports/dashboard_v2_latest.html
 ```
 
-`dashboardv2` 保留 v1 数据底座，但把交互重排为
-`行业主线 -> 主线股票池 -> 龙头收敛 -> 技术确认 -> 每日复盘`。当前第一版用缓存
-股票池的板块、样本涨幅、成交额、财报和技术/操作建议字段估算主线；行业指数、
-资金流或新闻催化缺失时会保守提示，不编造上涨原因。
+`dashboard` v1 现在会先展示行业主线证据板，再进入原有矩阵和回测区；
+`dashboardv2` 仅保留兼容入口和暂停更新提示，不再作为新的主入口继续演进。
 
 dashboard、dashboard-server 和 validate-dashboard 默认使用沪深 300 缓存成分池。
 这些 dashboard-oriented 命令默认启用完整 dashboard 数据快照缓存：同一组参数且底层源数据指纹未变化时，会直接复用

@@ -26,6 +26,10 @@ Current default dashboard output:
 
 Dashboard-oriented commands default to the cached CSI 300 universe. Use
 `--universe tech` only when the technology keyword pool is explicitly needed.
+The v1 dashboard now inserts an industry-mainline evidence board between data
+health and the existing decision surface, and uses the selected industry pool
+for downstream macro/technical analysis when available. `dashboardv2` is kept
+only as a paused compatibility entry.
 
 ## Key Modules
 
@@ -70,6 +74,11 @@ Dashboard-oriented commands default to the cached CSI 300 universe. Use
   stock type. It also has local stock-type chips for quickly filtering the matrix
   without rerunning the pipeline. Full stage tables remain available below the
   candidate overview.
+- The v1 dashboard now places an `行业主线证据板` under the data-health strip
+  and above the main matrix. The board defaults to the top-ranked industry and
+  clearly labels the current pool as industry full constituents or a degraded
+  sample pool. When a selected industry is available, downstream stages use
+  that industry's stock pool instead of the default CSI 300-only pool.
 - The matrix includes a historical date selector. In `dashboard-server` mode,
   changing the date reloads the dashboard with `as_of_date`. A matching
   `dashboard_snapshots` entry may be reused directly; otherwise the full serial

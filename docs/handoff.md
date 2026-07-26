@@ -23,12 +23,13 @@ Use this file as the first stop when a new thread needs to continue work.
   - Dashboard-oriented commands now default to the cached CSI 300 universe. The
     historical date form preserves universe, index symbol, sector, and
     stock-type filters when recalculating.
-  - `dashboardv2` 已作为独立入口加入，v1 `dashboard` 交互保持不变。v2
-    复用现有 dashboard 模型与 SQLite 缓存，将页面组织为
-    `行业主线 -> 主线股票池 -> 龙头收敛 -> 技术确认 -> 每日复盘`。当前第一版
-    用股票池阶段的 `board_name`、样本涨幅、成交额、财报和回撤字段估算行业
-    主线；行业指数历史、资金流和新闻催化缺失时显示保守降级提示，不编造原因。
-    v2 快照通过 `dashboard_variant="v2"` 与 v1 隔离，v1 缺省快照 key 保持兼容。
+  - `dashboard` v1 已合并行业主线证据板：页面先显示数据健康，再显示行业
+    主线证据，然后进入原有 `宏观潜力 × 技术时机`、详情、回测和验证交互。
+    未显式指定行业时，pipeline 会先计算行业主线榜并默认选中排名第一的行业；
+    下方 `股票池 -> 宏观粗筛 -> 技术分析 -> 操作建议` 使用该行业股票池。
+    行业全成分股优先来自 `industry_members`，不可用时透明降级为缓存样本代理。
+  - `dashboardv2` 保留兼容入口和暂停更新提示，不再承接新增交互需求。v2
+    快照仍通过 `dashboard_variant="v2"` 与 v1 隔离，v1 缺省快照 key 保持兼容。
   - `组合评分` wording has been changed to `宏观粗筛`.
   - `板块筛选` is displayed as `股票池`; the table includes `股票类型`, and hover
     text shows the matched keyword and board-name classification basis.

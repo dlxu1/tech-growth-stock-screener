@@ -6,6 +6,7 @@ import pandas as pd
 
 from common import find_col, to_number
 from infra.cache import read_price_metrics
+from data.sources import load_board_constituents, load_financial_report, load_industry_boards, load_spot, normalize_financials
 from strategies.coarse.network import fetch_coarse_source_bundle
 
 
@@ -70,6 +71,57 @@ def _extract_optional_metrics(raw_frames: list[pd.DataFrame]) -> pd.DataFrame:
     return metrics
 
 
+def _build_selected_industry_universe(args, selected_industry: str) -> tuple[pd.DataFrame, dict]:
+    report_raw, report_date, financial_source = load_financial_report(args.report_date, args.refresh, args.source, args.no_proxy)
+    fin = normalize_financials(report_raw)
+    spot, spot_source = load_spot(args.refresh, args.no_proxy, args.source)
+    boards = load_industry_boards(args.refresh, args.no_proxy, args.source)
+    selected = boards[boards["board_name"].astype(str) == selected_industry].copy()
+    if selected.empty:
+        selected = boards[boards["board_name"].astype(str).str.contains(str(selected_industry), na=False)].copy()
+    if selected.empty:
+        raise RuntimeError(f"Cannot find industry board for {selected_industry}")
+    board_row = selected.iloc[0]
+    board_name = str(board_row.get("board_name") or selected_industry)
+    board_code = str(board_row.get("board_code") or "")
+    constituents = load_board_constituents(board_name, board_code, args.refresh, args.no_proxy, args.source)
+    base = constituents.merge(spot, on="code", how="left", suffixes=("", "_spot"))
+    if "name_spot" in base.columns:
+        if "name" in base.columns:
+            base["name"] = base["name"].fillna(base["name_spot"])
+        else:
+            base["name"] = base["name_spot"]
+        base = base.drop(columns=["name_spot"])
+    if not fin.empty:
+        base = base.merge(fin, on="code", how="left", suffixes=("", "_financial"))
+        if "financial_name" in base.columns and "name" in base.columns:
+            base["name"] = base["name"].fillna(base["financial_name"])
+    optional = _extract_optional_metrics([report_raw, spot])
+    if not optional.empty:
+        base = base.merge(optional, on="code", how="left")
+    if "revenue" in base.columns and "rd_expense" in base.columns:
+        base["rd_intensity"] = pd.to_numeric(base["rd_expense"], errors="coerce") / pd.to_numeric(base["revenue"], errors="coerce")
+    price_metrics = read_price_metrics(base["code"].astype(str).tolist(), as_of_date=getattr(args, "as_of_date", None))
+    if not price_metrics.empty:
+        base = base.merge(price_metrics, on="code", how="left")
+    growth_flags = base.assign(_growth_positive=_positive(base["revenue_yoy"]) & _positive(base["profit_yoy"]))
+    base["industry_growth_breadth"] = growth_flags.groupby("board_name")["_growth_positive"].transform("sum")
+    meta = {
+        "report_date": report_date,
+        "financial_source": financial_source,
+        "universe_source": "industry-board constituents",
+        "quote_source": spot_source,
+        "tech_boards": int(base["board_name"].nunique()) if "board_name" in base.columns else 0,
+        "tech_universe": len(base),
+        "selected_industry": board_name,
+        "selected_industry_code": board_code,
+        "selected_industry_pool_label": "行业全成分股",
+        "selected_industry_pool_kind": "full",
+        "selected_industry_pool_source": "industry_members",
+    }
+    return base, meta
+
+
 def filter_by_sector(base: pd.DataFrame, sector_text: str | None) -> tuple[pd.DataFrame, dict]:
     """Filter a base universe by comma-separated sector terms in board_name."""
 
@@ -90,6 +142,48 @@ def filter_by_sector(base: pd.DataFrame, sector_text: str | None) -> tuple[pd.Da
 
 
 def build_base_universe(args) -> tuple[pd.DataFrame, dict]:
+    selected_industry = str(getattr(args, "selected_industry", "") or "").strip()
+    if selected_industry:
+        try:
+            base, meta = _build_selected_industry_universe(args, selected_industry)
+            sector_text = getattr(args, "sector", "") or selected_industry
+            if sector_text:
+                base, sector_meta = filter_by_sector(base, sector_text)
+                if not base.empty:
+                    meta.update(sector_meta)
+                    meta["selected_industry_pool_kind"] = "full"
+                    meta["selected_industry_pool_label"] = "行业全成分股"
+                    return base, meta
+            return base, meta
+        except Exception as exc:
+            fallback_note = str(exc)
+            report_raw, financials, universe, meta = fetch_coarse_source_bundle(args)
+            spot = meta.pop("spot")
+            base = universe.merge(financials, on="code", how="left")
+            optional = _extract_optional_metrics([report_raw, spot])
+            if not optional.empty:
+                base = base.merge(optional, on="code", how="left")
+            if "revenue" in base.columns and "rd_expense" in base.columns:
+                base["rd_intensity"] = pd.to_numeric(base["rd_expense"], errors="coerce") / pd.to_numeric(base["revenue"], errors="coerce")
+            price_metrics = read_price_metrics(base["code"].astype(str).tolist(), as_of_date=getattr(args, "as_of_date", None))
+            if not price_metrics.empty:
+                base = base.merge(price_metrics, on="code", how="left")
+            growth_flags = base.assign(_growth_positive=_positive(base["revenue_yoy"]) & _positive(base["profit_yoy"]))
+            base["industry_growth_breadth"] = growth_flags.groupby("board_name")["_growth_positive"].transform("sum")
+            sector_text = selected_industry or getattr(args, "sector", "")
+            if sector_text:
+                base, sector_meta = filter_by_sector(base, sector_text)
+                meta.update(sector_meta)
+            meta.update(
+                {
+                    "selected_industry": selected_industry,
+                    "selected_industry_pool_label": "缓存样本代理",
+                    "selected_industry_pool_kind": "sample",
+                    "selected_industry_pool_source": str(meta.get("universe_source") or "sample"),
+                    "selected_industry_fallback_note": fallback_note,
+                }
+            )
+            return base, meta
     report_raw, financials, universe, meta = fetch_coarse_source_bundle(args)
     spot = meta.pop("spot")
     base = universe.merge(financials, on="code", how="left")

@@ -25,9 +25,45 @@ class DashboardHtmlTest(unittest.TestCase):
                 "as_of_date": "2026-07-10",
                 "universe": "csi300",
                 "universe_index_symbol": "000300",
+                "sector": "半导体",
                 "strategy_title": "潜力股组合评分",
                 "weight_version": "震荡防御版",
                 "weight_version_note": "震荡防御版：更重视质量、风控、反转，弱化动量。由市场状态投票自动切换。",
+                "selected_industry": "半导体",
+                "selected_industry_rank": 1,
+                "selected_industry_reason": "近60日涨幅 48.83%；上涨家数占比 90.91%；成交额 155.9 亿",
+                "selected_industry_note": "默认选中排名第一的行业",
+                "industry_mainline_source_label": "指数样本代理",
+                "industry_mainlines": [
+                    {
+                        "board_name": "半导体",
+                        "rank": 1,
+                        "mainline_score": 0.91,
+                        "stock_count": 87,
+                        "avg_return_60d": 0.4883,
+                        "positive_ratio": 0.9091,
+                        "avg_amount_20d": 15590000000,
+                        "avg_revenue_yoy": 0.123,
+                        "avg_profit_yoy": 0.081,
+                        "avg_max_drawdown_252d": -0.189,
+                        "mainline_reason": "近60日涨幅 48.83%；上涨家数占比 90.91%；成交额 155.9 亿",
+                        "pool_source_label": "行业全成分股",
+                        "pool_source_note": "行业成分股",
+                        "leaders": [
+                            {"code": "688981", "name": "中芯国际", "leader_reason": "市值靠前、近60日强势"},
+                        ],
+                        "stock_pool": [
+                            {"code": "688981", "name": "中芯国际", "leader_reason": "市值靠前、近60日强势"},
+                        ],
+                    }
+                ],
+                "industry_pool": {
+                    "count": 87,
+                    "source_label": "行业全成分股",
+                    "source_kind": "full",
+                    "source": "industry_members",
+                    "note": "行业成分股",
+                },
                 "health": {
                     "health_score": 70,
                     "freshness": {"latest_trade_date": "2026-07-09", "lag_days": 1},
@@ -330,6 +366,7 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("<!doctype html>", html)
         self.assertIn("选股流程交互仪表盘", html)
         self.assertIn("数据健康", html)
+        self.assertIn("行业主线证据板", html)
         self.assertIn("70/100", html)
         self.assertIn("最新行情日", html)
         self.assertIn("2026-07-09", html)
@@ -338,6 +375,8 @@ class DashboardHtmlTest(unittest.TestCase):
         self.assertIn("类型过滤", html)
         self.assertIn("科技股 1/2", html)
         self.assertIn("策略口径", html)
+        self.assertIn("当前选中 半导体", html)
+        self.assertLess(html.index("行业主线证据板"), html.index("潜力-时机矩阵"))
         self.assertIn("潜力股组合评分", html)
         self.assertIn("权重版本", html)
         self.assertIn("震荡防御版", html)

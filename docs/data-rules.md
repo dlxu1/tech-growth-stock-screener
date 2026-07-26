@@ -105,31 +105,29 @@ snapshot. Historical snapshots should be treated as research replay artifacts:
 they preserve the model produced under the source data fingerprint available at
 the time, and are not direct trade instructions.
 
-## Dashboardv2 行业主线视图
+## Dashboard v1 行业主线证据板
 
-`dashboardv2` 是独立入口，复用现有 dashboard 串行模型和 SQLite 缓存，但把
-展示链路重排为：
+`dashboard` v1 现在在数据健康条下方插入行业主线证据板，并把选中的
+行业作为后续 `股票池 -> 宏观粗筛 -> 技术分析 -> 操作建议` 的上游作用域。
+主线榜和选中行业的口径如下：
+
+- 行业主线强度优先复用 `board_name`、`return_60d`、`amount_20d`、
+  `revenue_yoy`、`profit_yoy`、`market_cap` 和 `max_drawdown_252d` 的证据排序骨架。
+- `industry_members` 可用时，行业股票池优先使用该行业全成分股。
+- 行业全成分股不可用时，降级为当前基础池内的行业样本，并明确标注样本代理或指数内样本。
+- 行业证据板和 `summary.industry_pool` 需要展示当前股票池来源、池内数量和降级说明。
+- 默认未显式指定行业时，选中行业主线榜排名第一且有可用股票池的行业。
+
+## Dashboardv2 兼容视图
+
+`dashboardv2` 现在只保留兼容入口和暂停更新提示，不再承接新的交互需求。
+历史上它的展示链路曾是：
 
 ```text
 行业主线 -> 主线股票池 -> 龙头收敛 -> 技术确认 -> 每日复盘
 ```
 
-第一阶段实现不改变现有评分公式和阶段成员。行业主线榜优先使用当前 dashboard
-模型中 `股票池` 阶段的 `board_name`、`return_60d`、`amount_20d`、
-`revenue_yoy`、`profit_yoy`、`market_cap` 和 `max_drawdown_252d` 做板块
-样本估算：
-
-- 行业主线强度：缓存样本涨幅排名、上涨家数占比、平均成交额、成长样本和回撤样本的组合。
-- 主线股票池：同一 `board_name` 下的股票，默认最多展示前 12 只。
-- 龙头收敛：在主线股票池内按市值、样本涨幅、成交额、成长和回撤排序。
-- 技术确认：复用现有 `技术分析` 和 `操作建议` 阶段字段，只对主线龙头展示结论、关键价位和风险提醒。
-- 每日复盘：默认取每条主线前 1-3 只龙头作为复盘队列。
-
-若行业指数历史、资金流、新闻或催化摘要尚不可用，`dashboardv2` 必须展示保守
-降级提示，不得编造上涨原因，也不得自动扩展成无约束的全市场推荐。
-
-`dashboardv2` 的快照 key 与 v1 隔离，但 v1 的缺省 snapshot identity 保持兼容：
-只有 `dashboard_variant="v2"` 时才额外加入 variant 维度。
+若旧入口仍可访问，页面必须保守显示暂停更新说明，不得把它继续包装成新的主入口。
 
 ## Stage Contracts
 
@@ -165,7 +163,10 @@ Presentation rules:
   full classified pool; only the candidates passed to `宏观粗筛` are filtered.
 - Dashboard, dashboard-server, and validate-dashboard default to
   `--universe csi300` so the interactive matrix starts from the cached CSI 300
-  pool unless another universe is explicitly selected.
+  pool unless another universe is explicitly selected. When the dashboard
+  selects an industry mainline, the stock-pool stage may expand to that
+  industry's full constituents and carry `selected_industry` / pool-source
+  metadata forward for downstream stages.
 - `market_cap`: divide by `100000000`, keep two decimals, append `亿`.
 - `amount_20d`: divide by `100000000`, keep two decimals, append `亿`.
 - `revenue_yoy`, `profit_yoy`, `return_60d`, `max_drawdown_252d`: keep two decimals and append `%`.
